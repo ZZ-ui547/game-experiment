@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stones of the Nile</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #1a0a00;
+    color: #e8d5a3;
+    font-family: 'Georgia', serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  h1 {
+    font-size: 1.6rem;
+    margin: 10px 0 4px;
+    letter-spacing: 2px;
+    text-shadow: 0 0 10px #c4943a;
+  }
+
+  #hud {
+    display: flex;
+    gap: 24px;
+    font-size: 0.95rem;
+    margin-bottom: 6px;
+  }
+  #hud span { text-shadow: 0 0 6px #c4943a; }
+
+  #game-container {
+    position: relative;
+    border: 3px solid #c4943a;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  canvas {
+    display: block;
+    background: #1b4d6e;
+  }
+
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 5, 0, 0.85);
+    z-index: 10;
+  }
+  #overlay.hidden { display: none; }
+
+  #overlay h2 {
+    font-size: 2rem;
+    margin-bottom: 8px;
+    text-shadow: 0 0 12px #c4943a;
+  }
+  #overlay p {
+    font-size: 1rem;
+    margin-bottom: 16px;
+    text-align: center;
+    line-height: 1.5;
+    max-width: 300px;
+  }
+
+  #overlay button {
+    padding: 10px 32px;
+    font-size: 1.1rem;
+    font-family: 'Georgia', serif;
+    background: #c4943a;
+    color: #1a0a00;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+  #overlay button:hover { background: #e0b050; }
+
+  #controls-hint {
+    margin-top: 8px;
+    font-size: 0.8rem;
+    opacity: 0.6;
+  }
+
+  /* Touch controls for mobile */
+  #touch-controls {
+    display: none;
+    gap: 12px;
+    margin-top: 10px;
+  }
+  #touch-controls button {
+    width: 64px;
+    height: 64px;
+    font-size: 1.8rem;
+    background: #2a1a00;
+    color: #c4943a;
+    border: 2px solid #c4943a;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  #touch-controls button:active { background: #c4943a; color: #1a0a00; }
+
+  @media (pointer: coarse) {
+    #touch-controls { display: flex; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Stones of the Nile</h1>
+<div id="hud">
+  <span>Stones: <b id="hud-stones">10</b></span>
+  <span>Pyramid: <b id="hud-pyramid">0</b>/30</span>
+  <span>Distance: <b id="hud-dist">0</b>m</span>
+</div>
+
+<div id="game-container">
+  <canvas id="game"></canvas>
+
+  <div id="overlay">
+    <h2 id="overlay-title">Stones of the Nile</h2>
+    <p id="overlay-text">
+      Sail your boat down the Nile and deliver stones to build the Great Pyramid!<br><br>
+      Avoid rocks, hippos and crocodiles.<br>
+      Collect bonus stones along the way.
+    </p>
+    <button id="overlay-btn">Set Sail!</button>
+  </div>
+</div>
+
+<div id="controls-hint">Arrow keys or A/D to steer &bull; Spacebar to speed up</div>
+<div id="touch-controls">
+  <button id="btn-left">&larr;</button>
+  <button id="btn-boost">&#9650;</button>
+  <button id="btn-right">&rarr;</button>
+</div>
+
+<script>
+// ─── Config ───────────────────────────────────────────────────
+const COLS = 3;           // left, center, right
+const ROWS = 8;           // visible rows
+const CELL = 72;          // cell size in px
+const LANE_LABELS = ['Left', 'Center', 'Right'];
+
+const CANVAS_W = COLS * CELL;
+const CANVAS_H = ROWS * CELL;
+
+const SCROLL_SPEED   = 1.2;   // base pixels per frame
+const BOOST_MULT     = 2.5;
+const OBSTACLE_FREQ  = 0.25;  // chance per row per lane
+const BONUS_FREQ     = 0.10;
+const STONES_START   = 10;
+const PYRAMID_GOAL   = 30;
+const DELIVERY_DIST  = 500;   // distance between delivery sites (in "meters")
+
+// ─── Canvas Setup ─────────────────────────────────────────────
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width  = CANVAS_W;
+canvas.height = CANVAS_H;
+
+// ─── State ────────────────────────────────────────────────────
+let state; // set by resetGame()
+
+function resetGame() {
+  state = {
+    running: false,
+    gameOver: false,
+    won: false,
+    scrollY: 0,           // how far we've scrolled in pixels
+    speed: SCROLL_SPEED,
+    boatLane: 1,           // 0=left 1=center 2=right
+    boatY: CANVAS_H - CELL * 1.5,
+    stones: STONES_START,
+    pyramidStones: 0,
+    distance: 0,
+    nextDelivery: DELIVERY_DIST,
+    deliveryActive: false,
+    deliveryRow: null,
+    rows: [],              // generated rows
+    lastGenRow: -1,
+    invincibleTimer: 0,
+    flash: 0,
+    particles: [],
+  };
+  generateInitialRows();
+}
+
+// ─── Row Generation ───────────────────────────────────────────
+// Each "row" is an object: { y (world-y), cells: [null|'rock'|'hippo'|'croc'|'stone'|'delivery'] }
+
+function makeRow(worldY, forceEmpty) {
+  const cells = [null, null, null];
+  if (forceEmpty) return { y: worldY, cells };
+
+  // Possibly place an obstacle or bonus in each lane
+  for (let c = 0; c < COLS; c++) {
+    const r = Math.random();
+    if (r < OBSTACLE_FREQ) {
+      const types = ['rock', 'hippo', 'croc'];
+      cells[c] = types[Math.floor(Math.random() * types.length)];
+    } else if (r < OBSTACLE_FREQ + BONUS_FREQ) {
+      cells[c] = 'stone';
+    }
+  }
+  // Don't block all lanes
+  const blocked = cells.filter(c => c && c !== 'stone').length;
+  if (blocked === COLS) cells[Math.floor(Math.random() * COLS)] = null;
+
+  return { y: worldY, cells };
+}
+
+function generateInitialRows() {
+  state.rows = [];
+  for (let r = -2; r < ROWS + 4; r++) {
+    const worldY = r * CELL;
+    state.rows.push(makeRow(worldY, r > ROWS - 3));
+    state.lastGenRow = r;
+  }
+}
+
+function generateNewRows() {
+  const topWorld = state.scrollY - CELL * 2;
+  const neededWorldY = topWorld;
+  while (state.rows.length === 0 || state.rows[0].y > neededWorldY) {
+    state.lastGenRow++;
+    const wy = state.rows.length > 0 ? state.rows[0].y - CELL : neededWorldY;
+
+    // Check if this should be a delivery row
+    const dist = worldYToDistance(wy);
+    let row;
+    if (dist >= state.nextDelivery && !state.deliveryActive) {
+      row = { y: wy, cells: ['delivery', 'delivery', 'delivery'] };
+      state.deliveryActive = true;
+      state.deliveryRow = wy;
+    } else {
+      row = makeRow(wy, false);
+    }
+    state.rows.unshift(row);
+  }
+  // Prune rows that scrolled off-screen below
+  const bottomWorld = state.scrollY + CANVAS_H + CELL * 2;
+  while (state.rows.length > 0 && state.rows[state.rows.length - 1].y > bottomWorld) {
+    state.rows.pop();
+  }
+}
+
+function worldYToDistance(wy) {
+  // Distance increases as worldY decreases (scrolling up = moving forward)
+  return Math.max(0, Math.floor((state.rows.length > 0 ? (CANVAS_H - wy) : 0) / 3));
+}
+
+// ─── Drawing Helpers ──────────────────────────────────────────
+
+function drawWater() {
+  // Nile blue with subtle wave pattern
+  ctx.fillStyle = '#1b5d7e';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Wave lines
+  ctx.strokeStyle = 'rgba(100, 200, 235, 0.15)';
+  ctx.lineWidth = 2;
+  const waveOff = (state.scrollY * 0.3) % 40;
+  for (let y = -40 + waveOff; y < CANVAS_H + 40; y += 40) {
+    ctx.beginPath();
+    for (let x = 0; x <= CANVAS_W; x += 4) {
+      const yy = y + Math.sin((x + state.scrollY) * 0.05) * 6;
+      x === 0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
+
+  // Sand banks on the edges
+  const bankW = 10;
+  const gradient1 = ctx.createLinearGradient(0, 0, bankW, 0);
+  gradient1.addColorStop(0, '#c4a35a');
+  gradient1.addColorStop(1, 'rgba(196,163,90,0)');
+  ctx.fillStyle = gradient1;
+  ctx.fillRect(0, 0, bankW, CANVAS_H);
+
+  const gradient2 = ctx.createLinearGradient(CANVAS_W - bankW, 0, CANVAS_W, 0);
+  gradient2.addColorStop(0, 'rgba(196,163,90,0)');
+  gradient2.addColorStop(1, '#c4a35a');
+  ctx.fillStyle = gradient2;
+  ctx.fillRect(CANVAS_W - bankW, 0, bankW, CANVAS_H);
+
+  // Lane dividers (subtle)
+  ctx.strokeStyle = 'rgba(100, 200, 235, 0.08)';
+  ctx.setLineDash([8, 8]);
+  for (let c = 1; c < COLS; c++) {
+    ctx.beginPath();
+    ctx.moveTo(c * CELL, 0);
+    ctx.lineTo(c * CELL, CANVAS_H);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+}
+
+function screenY(worldY) {
+  return worldY - state.scrollY + CANVAS_H;
+}
+
+function drawEmoji(emoji, x, y, size) {
+  ctx.font = size + 'px serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, x, y);
+}
+
+function drawObstacles() {
+  for (const row of state.rows) {
+    const sy = screenY(row.y);
+    if (sy < -CELL || sy > CANVAS_H + CELL) continue;
+
+    for (let c = 0; c < COLS; c++) {
+      const cell = row.cells[c];
+      if (!cell) continue;
+      const cx = c * CELL + CELL / 2;
+      const cy = sy + CELL / 2;
+
+      if (cell === 'rock') {
+        drawEmoji('🪨', cx, cy, 36);
+      } else if (cell === 'hippo') {
+        drawEmoji('🦛', cx, cy, 36);
+      } else if (cell === 'croc') {
+        drawEmoji('🐊', cx, cy, 36);
+      } else if (cell === 'stone') {
+        drawEmoji('💎', cx, cy, 28);
+        // Glow
+        ctx.fillStyle = 'rgba(100, 200, 255, 0.15)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 20, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (cell === 'delivery') {
+        // Pyramid building site
+        ctx.fillStyle = 'rgba(196, 148, 58, 0.3)';
+        ctx.fillRect(c * CELL, sy, CELL, CELL);
+        drawEmoji('🏗️', cx, cy - 6, 28);
+        ctx.fillStyle = '#e8d5a3';
+        ctx.font = '10px Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillText('DELIVER', cx, cy + 18);
+      }
+    }
+  }
+}
+
+function drawBoat() {
+  if (state.invincibleTimer > 0 && Math.floor(state.flash) % 2 === 0) return;
+
+  const bx = state.boatLane * CELL + CELL / 2;
+  const by = state.boatY;
+
+  // Boat body
+  ctx.fillStyle = '#8B5E3C';
+  ctx.beginPath();
+  ctx.moveTo(bx - 22, by + 10);
+  ctx.lineTo(bx + 22, by + 10);
+  ctx.lineTo(bx + 16, by + 22);
+  ctx.lineTo(bx - 16, by + 22);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#5a3a1e';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Deck
+  ctx.fillStyle = '#a67c52';
+  ctx.fillRect(bx - 18, by - 2, 36, 14);
+
+  // Stones on boat
+  const stoneCount = Math.min(state.stones, 5);
+  for (let i = 0; i < stoneCount; i++) {
+    ctx.fillStyle = '#888';
+    ctx.beginPath();
+    ctx.arc(bx - 12 + i * 6, by + 4, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  }
+
+  // Sail
+  ctx.fillStyle = '#f5f0e0';
+  ctx.beginPath();
+  ctx.moveTo(bx, by - 28);
+  ctx.lineTo(bx + 16, by - 4);
+  ctx.lineTo(bx, by - 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#c4943a';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Mast
+  ctx.strokeStyle = '#5a3a1e';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(bx, by - 30);
+  ctx.lineTo(bx, by + 10);
+  ctx.stroke();
+
+  // Eye of Horus on sail
+  ctx.fillStyle = '#c4943a';
+  ctx.font = '12px serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('𓂀', bx + 6, by - 12);
+}
+
+function drawParticles() {
+  for (let i = state.particles.length - 1; i >= 0; i--) {
+    const p = state.particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= 0.02;
+    if (p.life <= 0) { state.particles.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPyramidProgress() {
+  // Small pyramid icon in top-right
+  const px = CANVAS_W - 40;
+  const py = 8;
+  const progress = state.pyramidStones / PYRAMID_GOAL;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(px - 26, py - 2, 58, 40);
+
+  // Pyramid outline
+  ctx.strokeStyle = '#c4943a';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(px, py + 4);
+  ctx.lineTo(px + 18, py + 32);
+  ctx.lineTo(px - 18, py + 32);
+  ctx.closePath();
+  ctx.stroke();
+
+  // Filled portion
+  if (progress > 0) {
+    ctx.fillStyle = '#c4943a';
+    ctx.beginPath();
+    const h = 28 * Math.min(progress, 1);
+    const topY = py + 32 - h;
+    const halfW = 18 * (h / 28);
+    ctx.moveTo(px - halfW, py + 32);
+    ctx.lineTo(px + halfW, py + 32);
+    ctx.lineTo(px + halfW * (1 - 0.1), topY);
+    ctx.lineTo(px - halfW * (1 - 0.1), topY);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+// ─── Collision ────────────────────────────────────────────────
+
+function checkCollisions() {
+  const boatWorldY = state.boatY + state.scrollY - CANVAS_H;
+
+  for (const row of state.rows) {
+    const dy = Math.abs(row.y - boatWorldY);
+    if (dy > CELL * 0.7) continue;
+
+    const cell = row.cells[state.boatLane];
+    if (!cell) continue;
+
+    if (cell === 'rock' || cell === 'hippo' || cell === 'croc') {
+      if (state.invincibleTimer <= 0) {
+        // Hit! Lose stones
+        state.stones -= 2;
+        state.invincibleTimer = 90; // frames of invincibility
+        spawnHitParticles();
+        if (state.stones <= 0) {
+          state.stones = 0;
+          state.gameOver = true;
+          state.running = false;
+          showOverlay('Shipwreck!', 'You lost all your stones in the Nile.\nDistance: ' + state.distance + 'm\nPyramid: ' + state.pyramidStones + '/' + PYRAMID_GOAL, 'Try Again');
+        }
+      }
+      return;
+    }
+
+    if (cell === 'stone') {
+      state.stones += 2;
+      row.cells[state.boatLane] = null;
+      spawnCollectParticles();
+    }
+
+    if (cell === 'delivery' && state.stones > 0) {
+      // Deliver stones
+      const deliver = Math.min(state.stones, 5);
+      state.stones -= deliver;
+      state.pyramidStones += deliver;
+      state.deliveryActive = false;
+      state.nextDelivery = state.distance + DELIVERY_DIST;
+      spawnDeliveryParticles();
+
+      if (state.pyramidStones >= PYRAMID_GOAL) {
+        state.won = true;
+        state.running = false;
+        showOverlay('Pyramid Complete!', 'You delivered ' + PYRAMID_GOAL + ' stones and built the Great Pyramid!\nDistance traveled: ' + state.distance + 'm', 'Play Again');
+      }
+
+      // Clear delivery row
+      for (const r of state.rows) {
+        for (let c = 0; c < COLS; c++) {
+          if (r.cells[c] === 'delivery') r.cells[c] = null;
+        }
+      }
+    }
+  }
+}
+
+// ─── Particles ────────────────────────────────────────────────
+
+function spawnHitParticles() {
+  const bx = state.boatLane * CELL + CELL / 2;
+  for (let i = 0; i < 12; i++) {
+    state.particles.push({
+      x: bx, y: state.boatY,
+      vx: (Math.random() - 0.5) * 4,
+      vy: (Math.random() - 0.5) * 4,
+      size: 4 + Math.random() * 4,
+      life: 1,
+      color: '#ff6644',
+    });
+  }
+}
+
+function spawnCollectParticles() {
+  const bx = state.boatLane * CELL + CELL / 2;
+  for (let i = 0; i < 8; i++) {
+    state.particles.push({
+      x: bx, y: state.boatY,
+      vx: (Math.random() - 0.5) * 3,
+      vy: -Math.random() * 3,
+      size: 3 + Math.random() * 3,
+      life: 1,
+      color: '#66ccff',
+    });
+  }
+}
+
+function spawnDeliveryParticles() {
+  const bx = state.boatLane * CELL + CELL / 2;
+  for (let i = 0; i < 20; i++) {
+    state.particles.push({
+      x: bx, y: state.boatY,
+      vx: (Math.random() - 0.5) * 5,
+      vy: -Math.random() * 5,
+      size: 3 + Math.random() * 5,
+      life: 1,
+      color: Math.random() > 0.5 ? '#c4943a' : '#e8d5a3',
+    });
+  }
+}
+
+// ─── Input ────────────────────────────────────────────────────
+
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
+    e.preventDefault();
+  }
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+document.getElementById('btn-left').addEventListener('touchstart', e => { e.preventDefault(); moveBoat(-1); });
+document.getElementById('btn-right').addEventListener('touchstart', e => { e.preventDefault(); moveBoat(1); });
+document.getElementById('btn-boost').addEventListener('touchstart', e => { e.preventDefault(); keys[' '] = true; });
+document.getElementById('btn-boost').addEventListener('touchend', e => { e.preventDefault(); keys[' '] = false; });
+
+let moveCD = 0;
+function handleInput() {
+  if (!state.running) return;
+  moveCD = Math.max(0, moveCD - 1);
+
+  if (moveCD === 0) {
+    if (keys['ArrowLeft'] || keys['a'] || keys['A']) { moveBoat(-1); moveCD = 10; }
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) { moveBoat(1); moveCD = 10; }
+  }
+
+  state.speed = (keys[' '] || keys['ArrowUp']) ? SCROLL_SPEED * BOOST_MULT : SCROLL_SPEED;
+}
+
+function moveBoat(dir) {
+  if (!state.running) return;
+  state.boatLane = Math.max(0, Math.min(COLS - 1, state.boatLane + dir));
+}
+
+// ─── Overlay ──────────────────────────────────────────────────
+
+const overlay    = document.getElementById('overlay');
+const overlayT   = document.getElementById('overlay-title');
+const overlayP   = document.getElementById('overlay-text');
+const overlayBtn = document.getElementById('overlay-btn');
+
+function showOverlay(title, text, btn) {
+  overlayT.textContent = title;
+  overlayP.textContent = text;
+  overlayBtn.textContent = btn;
+  overlay.classList.remove('hidden');
+}
+
+overlayBtn.addEventListener('click', () => {
+  overlay.classList.add('hidden');
+  resetGame();
+  state.running = true;
+});
+
+// ─── HUD ──────────────────────────────────────────────────────
+
+function updateHUD() {
+  document.getElementById('hud-stones').textContent = state.stones;
+  document.getElementById('hud-pyramid').textContent = state.pyramidStones;
+  document.getElementById('hud-dist').textContent = state.distance;
+}
+
+// ─── Game Loop ────────────────────────────────────────────────
+
+function update() {
+  if (!state.running) return;
+
+  state.scrollY -= state.speed;
+  state.distance = Math.floor(Math.abs(state.scrollY) / 3);
+
+  if (state.invincibleTimer > 0) {
+    state.invincibleTimer--;
+    state.flash += 0.3;
+  }
+
+  generateNewRows();
+  checkCollisions();
+  updateHUD();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  drawWater();
+  drawObstacles();
+  drawBoat();
+  drawParticles();
+  drawPyramidProgress();
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ─── Start ────────────────────────────────────────────────────
+resetGame();
+loop();
+</script>
+</body>
+</html>
