@@ -135,7 +135,7 @@
 
 <script>
 // ─── Config ───────────────────────────────────────────────────
-const CELL          = 48;   // fixed pixel-art cell size
+const COLS          = 3;
 const SCROLL_SPEED  = 1.2;
 const BOOST_MULT    = 2.5;
 const STONES_START  = 10;
@@ -143,26 +143,25 @@ const PYRAMID_GOAL  = 30;
 const DELIVERY_INTERVAL = 500;
 
 // Difficulty scaling (ramps with distance)
-const BASE_OBSTACLE_FREQ = 0.18;
-const MAX_OBSTACLE_FREQ  = 0.55;
-const FREQ_RAMP_DIST     = 3000; // distance over which freq maxes out
-const BASE_SPEED_MULT    = 1.0;
-const MAX_SPEED_MULT     = 2.2;
-const SPEED_RAMP_DIST    = 4000;
-const BONUS_FREQ         = 0.10;
+const OBSTACLE_FREQ = 0.30;
+const BONUS_FREQ    = 0.10;
+const BASE_SPEED_MULT  = 1.0;
+const MAX_SPEED_MULT   = 2.5;
+const SPEED_RAMP_DIST  = 4000;
 
 // ─── Responsive Canvas Setup ─────────────────────────────────
 const canvas    = document.getElementById('game');
 const ctx       = canvas.getContext('2d');
 const container = document.getElementById('game-container');
 
-let COLS, ROWS, CANVAS_W, CANVAS_H;
+let CELL, ROWS, CANVAS_W, CANVAS_H;
 
 function resizeCanvas() {
   const contW = container.clientWidth;
   const contH = container.clientHeight;
 
-  COLS = Math.max(5, Math.floor(contW / CELL));
+  // 3 lanes filling the width; cell size derived from screen
+  CELL = Math.floor(contW / COLS);
   ROWS = Math.max(8, Math.floor(contH / CELL) + 2);
 
   CANVAS_W = COLS * CELL;
@@ -184,11 +183,6 @@ document.getElementById('controls-hint').textContent =
     : 'Arrow keys / A-D to steer \u2022 Space to boost';
 
 // ─── Difficulty helpers ───────────────────────────────────────
-function currentObstacleFreq() {
-  const t = Math.min(1, state.distance / FREQ_RAMP_DIST);
-  return BASE_OBSTACLE_FREQ + (MAX_OBSTACLE_FREQ - BASE_OBSTACLE_FREQ) * t;
-}
-
 function currentSpeedMult() {
   const t = Math.min(1, state.distance / SPEED_RAMP_DIST);
   return BASE_SPEED_MULT + (MAX_SPEED_MULT - BASE_SPEED_MULT) * t;
@@ -203,7 +197,7 @@ function resetGame() {
     gameOver: false,
     won: false,
     speed: SCROLL_SPEED,
-    boatLane: Math.floor((COLS || 5) / 2),
+    boatLane: 1,
     boatScreenY: CANVAS_H - CELL * 2,
     stones: STONES_START,
     pyramidStones: 0,
@@ -232,36 +226,22 @@ function emptyRow() {
 // ─── Row Generation ───────────────────────────────────────────
 
 function makeObstacleRow() {
-  const cells = [];
-  const freq = currentObstacleFreq();
+  const cells = [null, null, null];
+  const types = ['rock', 'hippo', 'croc'];
+
   for (let c = 0; c < COLS; c++) {
     const r = Math.random();
-    if (r < freq) {
-      const types = ['rock', 'hippo', 'croc'];
-      cells.push(types[Math.floor(Math.random() * types.length)]);
-    } else if (r < freq + BONUS_FREQ) {
-      cells.push('stone');
-    } else {
-      cells.push(null);
+    if (r < OBSTACLE_FREQ) {
+      cells[c] = types[Math.floor(Math.random() * types.length)];
+    } else if (r < OBSTACLE_FREQ + BONUS_FREQ) {
+      cells[c] = 'stone';
     }
   }
-  // Ensure at least one safe lane
+
+  // Always guarantee at least one clear lane (no obstacle)
   const blocked = cells.filter(c => c && c !== 'stone').length;
   if (blocked >= COLS) {
-    // Clear a random cell
-    const idx = Math.floor(Math.random() * COLS);
-    cells[idx] = null;
-  }
-  // Also ensure at least 2 clear for wider grids
-  if (COLS >= 5) {
-    let clear = cells.filter(c => !c || c === 'stone').length;
-    while (clear < 2) {
-      const idx = Math.floor(Math.random() * COLS);
-      if (cells[idx] && cells[idx] !== 'stone') {
-        cells[idx] = null;
-        clear++;
-      }
-    }
+    cells[Math.floor(Math.random() * COLS)] = null;
   }
   return cells;
 }
@@ -559,8 +539,8 @@ function drawPyramidProgress() {
   }
 }
 
-// ─── Difficulty indicator ─────────────────────────────────────
-function drawDifficultyBar() {
+// ─── Speed indicator ──────────────────────────────────────────
+function drawSpeedBar() {
   const pad = 8;
   const barW = 52;
   const barH = 6;
@@ -574,13 +554,13 @@ function drawDifficultyBar() {
   ctx.font = '8px Georgia';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillText('DANGER', bx, by);
+  ctx.fillText('SPEED', bx, by);
 
-  const t = Math.min(1, state.distance / FREQ_RAMP_DIST);
+  const t = Math.min(1, state.distance / SPEED_RAMP_DIST);
   ctx.fillStyle = '#333';
   ctx.fillRect(bx, by + 10, barW, barH);
   const r = Math.floor(255 * t);
-  const g = Math.floor(100 * (1 - t));
+  const g = Math.floor(180 * (1 - t));
   ctx.fillStyle = `rgb(${r},${g},0)`;
   ctx.fillRect(bx, by + 10, barW * t, barH);
 }
@@ -860,7 +840,7 @@ function draw() {
   drawBoat();
   drawParticles();
   drawPyramidProgress();
-  drawDifficultyBar();
+  drawSpeedBar();
 }
 
 function loop() {
