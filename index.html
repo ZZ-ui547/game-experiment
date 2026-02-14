@@ -210,6 +210,7 @@ function resetGame() {
     particles: [],
     frameCount: 0,
     touchLane: null,
+    lastOpenLanes: [0, 1, 2],
   };
   // Pre-fill rows with empty water
   for (let i = 0; i < ROWS + 4; i++) {
@@ -238,11 +239,32 @@ function makeObstacleRow() {
     }
   }
 
-  // Always guarantee at least one clear lane (no obstacle)
-  const blocked = cells.filter(c => c && c !== 'stone').length;
-  if (blocked >= COLS) {
-    cells[Math.floor(Math.random() * COLS)] = null;
+  // Build set of reachable lanes (same or adjacent to any previous open lane)
+  const reachable = new Set();
+  for (const ol of state.lastOpenLanes) {
+    for (let d = -1; d <= 1; d++) {
+      const n = ol + d;
+      if (n >= 0 && n < COLS) reachable.add(n);
+    }
   }
+
+  // Check which reachable lanes are safe (not an obstacle)
+  const isObstacle = c => cells[c] && cells[c] !== 'stone';
+  const safeReachable = [...reachable].filter(c => !isObstacle(c));
+
+  // If no safe reachable lane exists, force-clear one reachable lane
+  if (safeReachable.length === 0) {
+    const arr = [...reachable];
+    const pick = arr[Math.floor(Math.random() * arr.length)];
+    cells[pick] = null;
+  }
+
+  // Update lastOpenLanes for the next row
+  state.lastOpenLanes = [];
+  for (let c = 0; c < COLS; c++) {
+    if (!isObstacle(c)) state.lastOpenLanes.push(c);
+  }
+
   return cells;
 }
 
