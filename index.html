@@ -259,10 +259,10 @@ function makeObstacleRow() {
     cells[pick] = null;
   }
 
-  // Update lastOpenLanes for the next row
+  // Update lastOpenLanes: only lanes that are both safe AND reachable
   state.lastOpenLanes = [];
   for (let c = 0; c < COLS; c++) {
-    if (!isObstacle(c)) state.lastOpenLanes.push(c);
+    if (!isObstacle(c) && reachable.has(c)) state.lastOpenLanes.push(c);
   }
 
   return cells;
@@ -855,7 +855,6 @@ function update() {
 }
 
 function draw() {
-  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   drawWater();
   drawLaneHighlight();
   drawRows();
