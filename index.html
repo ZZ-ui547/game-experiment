@@ -148,18 +148,17 @@
 const COLS = 3;           // left, center, right
 const ROWS = 8;           // visible rows
 const CELL = 72;          // cell size in px
-const LANE_LABELS = ['Left', 'Center', 'Right'];
 
 const CANVAS_W = COLS * CELL;
 const CANVAS_H = ROWS * CELL;
 
-const SCROLL_SPEED   = 1.2;   // base pixels per frame
+const SCROLL_SPEED   = 1.5;   // base pixels per frame
 const BOOST_MULT     = 2.5;
-const OBSTACLE_FREQ  = 0.25;  // chance per row per lane
-const BONUS_FREQ     = 0.10;
+const OBSTACLE_FREQ  = 0.30;  // chance per lane per row to have an obstacle
+const BONUS_FREQ     = 0.10;  // chance per lane per row for bonus stone
 const STONES_START   = 10;
 const PYRAMID_GOAL   = 30;
-const DELIVERY_DIST  = 500;   // distance between delivery sites (in "meters")
+const DELIVERY_INTERVAL = 500; // meters between delivery sites
 
 // ─── Canvas Setup ─────────────────────────────────────────────
 const canvas = document.getElementById('game');
@@ -168,40 +167,39 @@ canvas.width  = CANVAS_W;
 canvas.height = CANVAS_H;
 
 // ─── State ────────────────────────────────────────────────────
-let state; // set by resetGame()
+// Rows use SCREEN coordinates: y=0 is top of canvas, rows scroll downward.
+// The boat sits near the bottom at a fixed screen y.
+let state;
 
 function resetGame() {
   state = {
     running: false,
     gameOver: false,
     won: false,
-    scrollY: 0,           // how far we've scrolled in pixels
     speed: SCROLL_SPEED,
     boatLane: 1,           // 0=left 1=center 2=right
-    boatY: CANVAS_H - CELL * 1.5,
+    boatScreenY: CANVAS_H - CELL * 1.5,
     stones: STONES_START,
     pyramidStones: 0,
-    distance: 0,
-    nextDelivery: DELIVERY_DIST,
-    deliveryActive: false,
-    deliveryRow: null,
-    rows: [],              // generated rows
-    lastGenRow: -1,
+    distance: 0,           // total distance in meters
+    distAccum: 0,          // sub-pixel distance accumulator
+    nextDeliveryAt: DELIVERY_INTERVAL,
+    rows: [],              // { y: screen-y, cells: [cell,cell,cell] }
     invincibleTimer: 0,
     flash: 0,
     particles: [],
+    frameCount: 0,
   };
-  generateInitialRows();
+  // Fill screen with empty rows so the player has time to react
+  for (let i = 0; i < ROWS + 2; i++) {
+    state.rows.push({ y: -CELL + i * CELL, cells: [null, null, null] });
+  }
 }
 
 // ─── Row Generation ───────────────────────────────────────────
-// Each "row" is an object: { y (world-y), cells: [null|'rock'|'hippo'|'croc'|'stone'|'delivery'] }
 
-function makeRow(worldY, forceEmpty) {
+function makeObstacleRow() {
   const cells = [null, null, null];
-  if (forceEmpty) return { y: worldY, cells };
-
-  // Possibly place an obstacle or bonus in each lane
   for (let c = 0; c < COLS; c++) {
     const r = Math.random();
     if (r < OBSTACLE_FREQ) {
@@ -211,88 +209,68 @@ function makeRow(worldY, forceEmpty) {
       cells[c] = 'stone';
     }
   }
-  // Don't block all lanes
+  // Never block all 3 lanes — always leave at least one open
   const blocked = cells.filter(c => c && c !== 'stone').length;
-  if (blocked === COLS) cells[Math.floor(Math.random() * COLS)] = null;
-
-  return { y: worldY, cells };
-}
-
-function generateInitialRows() {
-  state.rows = [];
-  for (let r = -2; r < ROWS + 4; r++) {
-    const worldY = r * CELL;
-    state.rows.push(makeRow(worldY, r > ROWS - 3));
-    state.lastGenRow = r;
+  if (blocked === COLS) {
+    cells[Math.floor(Math.random() * COLS)] = null;
   }
+  return cells;
 }
 
-function generateNewRows() {
-  const topWorld = state.scrollY - CELL * 2;
-  const neededWorldY = topWorld;
-  while (state.rows.length === 0 || state.rows[0].y > neededWorldY) {
-    state.lastGenRow++;
-    const wy = state.rows.length > 0 ? state.rows[0].y - CELL : neededWorldY;
+function makeDeliveryRow() {
+  return ['delivery', 'delivery', 'delivery'];
+}
 
-    // Check if this should be a delivery row
-    const dist = worldYToDistance(wy);
-    let row;
-    if (dist >= state.nextDelivery && !state.deliveryActive) {
-      row = { y: wy, cells: ['delivery', 'delivery', 'delivery'] };
-      state.deliveryActive = true;
-      state.deliveryRow = wy;
-    } else {
-      row = makeRow(wy, false);
-    }
-    state.rows.unshift(row);
+function spawnRow() {
+  // Place new row just above the visible area
+  const topY = state.rows.length > 0 ? state.rows[0].y : 0;
+  const y = topY - CELL;
+
+  let cells;
+  if (state.distance >= state.nextDeliveryAt) {
+    cells = makeDeliveryRow();
+    state.nextDeliveryAt = state.distance + DELIVERY_INTERVAL;
+  } else {
+    cells = makeObstacleRow();
   }
-  // Prune rows that scrolled off-screen below
-  const bottomWorld = state.scrollY + CANVAS_H + CELL * 2;
-  while (state.rows.length > 0 && state.rows[state.rows.length - 1].y > bottomWorld) {
-    state.rows.pop();
-  }
+
+  state.rows.unshift({ y, cells });
 }
 
-function worldYToDistance(wy) {
-  // Distance increases as worldY decreases (scrolling up = moving forward)
-  return Math.max(0, Math.floor((state.rows.length > 0 ? (CANVAS_H - wy) : 0) / 3));
-}
-
-// ─── Drawing Helpers ──────────────────────────────────────────
+// ─── Drawing ──────────────────────────────────────────────────
 
 function drawWater() {
-  // Nile blue with subtle wave pattern
   ctx.fillStyle = '#1b5d7e';
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  // Wave lines
+  // Animated wave lines
   ctx.strokeStyle = 'rgba(100, 200, 235, 0.15)';
   ctx.lineWidth = 2;
-  const waveOff = (state.scrollY * 0.3) % 40;
+  const waveOff = (state.frameCount * 0.8) % 40;
   for (let y = -40 + waveOff; y < CANVAS_H + 40; y += 40) {
     ctx.beginPath();
     for (let x = 0; x <= CANVAS_W; x += 4) {
-      const yy = y + Math.sin((x + state.scrollY) * 0.05) * 6;
+      const yy = y + Math.sin((x + state.frameCount * 0.6) * 0.05) * 6;
       x === 0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
     }
     ctx.stroke();
   }
 
-  // Sand banks on the edges
+  // Sand banks on edges
   const bankW = 10;
-  const gradient1 = ctx.createLinearGradient(0, 0, bankW, 0);
-  gradient1.addColorStop(0, '#c4a35a');
-  gradient1.addColorStop(1, 'rgba(196,163,90,0)');
-  ctx.fillStyle = gradient1;
+  const g1 = ctx.createLinearGradient(0, 0, bankW, 0);
+  g1.addColorStop(0, '#c4a35a');
+  g1.addColorStop(1, 'rgba(196,163,90,0)');
+  ctx.fillStyle = g1;
   ctx.fillRect(0, 0, bankW, CANVAS_H);
 
-  const gradient2 = ctx.createLinearGradient(CANVAS_W - bankW, 0, CANVAS_W, 0);
-  gradient2.addColorStop(0, 'rgba(196,163,90,0)');
-  gradient2.addColorStop(1, '#c4a35a');
-  ctx.fillStyle = gradient2;
+  const g2 = ctx.createLinearGradient(CANVAS_W - bankW, 0, CANVAS_W, 0);
+  g2.addColorStop(0, 'rgba(196,163,90,0)');
+  g2.addColorStop(1, '#c4a35a');
+  ctx.fillStyle = g2;
   ctx.fillRect(CANVAS_W - bankW, 0, bankW, CANVAS_H);
 
-  // Lane dividers (subtle)
+  // Subtle lane dividers
   ctx.strokeStyle = 'rgba(100, 200, 235, 0.08)';
   ctx.setLineDash([8, 8]);
   for (let c = 1; c < COLS; c++) {
@@ -304,10 +282,6 @@ function drawWater() {
   ctx.setLineDash([]);
 }
 
-function screenY(worldY) {
-  return worldY - state.scrollY + CANVAS_H;
-}
-
 function drawEmoji(emoji, x, y, size) {
   ctx.font = size + 'px serif';
   ctx.textAlign = 'center';
@@ -315,16 +289,16 @@ function drawEmoji(emoji, x, y, size) {
   ctx.fillText(emoji, x, y);
 }
 
-function drawObstacles() {
+function drawRows() {
   for (const row of state.rows) {
-    const sy = screenY(row.y);
-    if (sy < -CELL || sy > CANVAS_H + CELL) continue;
+    if (row.y < -CELL || row.y > CANVAS_H + CELL) continue;
 
     for (let c = 0; c < COLS; c++) {
       const cell = row.cells[c];
       if (!cell) continue;
+
       const cx = c * CELL + CELL / 2;
-      const cy = sy + CELL / 2;
+      const cy = row.y + CELL / 2;
 
       if (cell === 'rock') {
         drawEmoji('🪨', cx, cy, 36);
@@ -334,7 +308,7 @@ function drawObstacles() {
         drawEmoji('🐊', cx, cy, 36);
       } else if (cell === 'stone') {
         drawEmoji('💎', cx, cy, 28);
-        // Glow
+        // Glow effect
         ctx.fillStyle = 'rgba(100, 200, 255, 0.15)';
         ctx.beginPath();
         ctx.arc(cx, cy, 20, 0, Math.PI * 2);
@@ -342,7 +316,7 @@ function drawObstacles() {
       } else if (cell === 'delivery') {
         // Pyramid building site
         ctx.fillStyle = 'rgba(196, 148, 58, 0.3)';
-        ctx.fillRect(c * CELL, sy, CELL, CELL);
+        ctx.fillRect(c * CELL, row.y, CELL, CELL);
         drawEmoji('🏗️', cx, cy - 6, 28);
         ctx.fillStyle = '#e8d5a3';
         ctx.font = '10px Georgia';
@@ -357,9 +331,9 @@ function drawBoat() {
   if (state.invincibleTimer > 0 && Math.floor(state.flash) % 2 === 0) return;
 
   const bx = state.boatLane * CELL + CELL / 2;
-  const by = state.boatY;
+  const by = state.boatScreenY;
 
-  // Boat body
+  // Boat hull
   ctx.fillStyle = '#8B5E3C';
   ctx.beginPath();
   ctx.moveTo(bx - 22, by + 10);
@@ -376,9 +350,9 @@ function drawBoat() {
   ctx.fillStyle = '#a67c52';
   ctx.fillRect(bx - 18, by - 2, 36, 14);
 
-  // Stones on boat
-  const stoneCount = Math.min(state.stones, 5);
-  for (let i = 0; i < stoneCount; i++) {
+  // Stones cargo on deck
+  const shown = Math.min(state.stones, 5);
+  for (let i = 0; i < shown; i++) {
     ctx.fillStyle = '#888';
     ctx.beginPath();
     ctx.arc(bx - 12 + i * 6, by + 4, 4, 0, Math.PI * 2);
@@ -432,7 +406,6 @@ function drawParticles() {
 }
 
 function drawPyramidProgress() {
-  // Small pyramid icon in top-right
   const px = CANVAS_W - 40;
   const py = 8;
   const progress = state.pyramidStones / PYRAMID_GOAL;
@@ -459,8 +432,8 @@ function drawPyramidProgress() {
     const halfW = 18 * (h / 28);
     ctx.moveTo(px - halfW, py + 32);
     ctx.lineTo(px + halfW, py + 32);
-    ctx.lineTo(px + halfW * (1 - 0.1), topY);
-    ctx.lineTo(px - halfW * (1 - 0.1), topY);
+    ctx.lineTo(px + halfW * 0.9, topY);
+    ctx.lineTo(px - halfW * 0.9, topY);
     ctx.closePath();
     ctx.fill();
   }
@@ -469,26 +442,31 @@ function drawPyramidProgress() {
 // ─── Collision ────────────────────────────────────────────────
 
 function checkCollisions() {
-  const boatWorldY = state.boatY + state.scrollY - CANVAS_H;
+  const boatTop = state.boatScreenY - 10;
+  const boatBot = state.boatScreenY + 22;
 
   for (const row of state.rows) {
-    const dy = Math.abs(row.y - boatWorldY);
-    if (dy > CELL * 0.7) continue;
+    // Check vertical overlap between boat and this row
+    const rowTop = row.y;
+    const rowBot = row.y + CELL;
+    if (rowBot < boatTop || rowTop > boatBot) continue;
 
     const cell = row.cells[state.boatLane];
     if (!cell) continue;
 
     if (cell === 'rock' || cell === 'hippo' || cell === 'croc') {
       if (state.invincibleTimer <= 0) {
-        // Hit! Lose stones
         state.stones -= 2;
-        state.invincibleTimer = 90; // frames of invincibility
+        state.invincibleTimer = 90;
         spawnHitParticles();
+        row.cells[state.boatLane] = null; // remove so it doesn't re-trigger
         if (state.stones <= 0) {
           state.stones = 0;
           state.gameOver = true;
           state.running = false;
-          showOverlay('Shipwreck!', 'You lost all your stones in the Nile.\nDistance: ' + state.distance + 'm\nPyramid: ' + state.pyramidStones + '/' + PYRAMID_GOAL, 'Try Again');
+          showOverlay('Shipwreck!',
+            'You lost all your stones in the Nile.\nDistance: ' + state.distance + 'm\nPyramid: ' + state.pyramidStones + '/' + PYRAMID_GOAL,
+            'Try Again');
         }
       }
       return;
@@ -501,25 +479,20 @@ function checkCollisions() {
     }
 
     if (cell === 'delivery' && state.stones > 0) {
-      // Deliver stones
       const deliver = Math.min(state.stones, 5);
       state.stones -= deliver;
       state.pyramidStones += deliver;
-      state.deliveryActive = false;
-      state.nextDelivery = state.distance + DELIVERY_DIST;
       spawnDeliveryParticles();
+
+      // Clear all delivery cells in this row
+      for (let c = 0; c < COLS; c++) row.cells[c] = null;
 
       if (state.pyramidStones >= PYRAMID_GOAL) {
         state.won = true;
         state.running = false;
-        showOverlay('Pyramid Complete!', 'You delivered ' + PYRAMID_GOAL + ' stones and built the Great Pyramid!\nDistance traveled: ' + state.distance + 'm', 'Play Again');
-      }
-
-      // Clear delivery row
-      for (const r of state.rows) {
-        for (let c = 0; c < COLS; c++) {
-          if (r.cells[c] === 'delivery') r.cells[c] = null;
-        }
+        showOverlay('Pyramid Complete!',
+          'You delivered ' + PYRAMID_GOAL + ' stones!\nThe Great Pyramid is built!\nDistance: ' + state.distance + 'm',
+          'Play Again');
       }
     }
   }
@@ -531,7 +504,7 @@ function spawnHitParticles() {
   const bx = state.boatLane * CELL + CELL / 2;
   for (let i = 0; i < 12; i++) {
     state.particles.push({
-      x: bx, y: state.boatY,
+      x: bx, y: state.boatScreenY,
       vx: (Math.random() - 0.5) * 4,
       vy: (Math.random() - 0.5) * 4,
       size: 4 + Math.random() * 4,
@@ -545,7 +518,7 @@ function spawnCollectParticles() {
   const bx = state.boatLane * CELL + CELL / 2;
   for (let i = 0; i < 8; i++) {
     state.particles.push({
-      x: bx, y: state.boatY,
+      x: bx, y: state.boatScreenY,
       vx: (Math.random() - 0.5) * 3,
       vy: -Math.random() * 3,
       size: 3 + Math.random() * 3,
@@ -559,7 +532,7 @@ function spawnDeliveryParticles() {
   const bx = state.boatLane * CELL + CELL / 2;
   for (let i = 0; i < 20; i++) {
     state.particles.push({
-      x: bx, y: state.boatY,
+      x: bx, y: state.boatScreenY,
       vx: (Math.random() - 0.5) * 5,
       vy: -Math.random() * 5,
       size: 3 + Math.random() * 5,
@@ -580,10 +553,10 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => { keys[e.key] = false; });
 
-document.getElementById('btn-left').addEventListener('touchstart', e => { e.preventDefault(); moveBoat(-1); });
+document.getElementById('btn-left').addEventListener('touchstart',  e => { e.preventDefault(); moveBoat(-1); });
 document.getElementById('btn-right').addEventListener('touchstart', e => { e.preventDefault(); moveBoat(1); });
 document.getElementById('btn-boost').addEventListener('touchstart', e => { e.preventDefault(); keys[' '] = true; });
-document.getElementById('btn-boost').addEventListener('touchend', e => { e.preventDefault(); keys[' '] = false; });
+document.getElementById('btn-boost').addEventListener('touchend',   e => { e.preventDefault(); keys[' '] = false; });
 
 let moveCD = 0;
 function handleInput() {
@@ -591,8 +564,8 @@ function handleInput() {
   moveCD = Math.max(0, moveCD - 1);
 
   if (moveCD === 0) {
-    if (keys['ArrowLeft'] || keys['a'] || keys['A']) { moveBoat(-1); moveCD = 10; }
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) { moveBoat(1); moveCD = 10; }
+    if (keys['ArrowLeft']  || keys['a'] || keys['A']) { moveBoat(-1); moveCD = 10; }
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) { moveBoat(1);  moveCD = 10; }
   }
 
   state.speed = (keys[' '] || keys['ArrowUp']) ? SCROLL_SPEED * BOOST_MULT : SCROLL_SPEED;
@@ -626,9 +599,9 @@ overlayBtn.addEventListener('click', () => {
 // ─── HUD ──────────────────────────────────────────────────────
 
 function updateHUD() {
-  document.getElementById('hud-stones').textContent = state.stones;
+  document.getElementById('hud-stones').textContent  = state.stones;
   document.getElementById('hud-pyramid').textContent = state.pyramidStones;
-  document.getElementById('hud-dist').textContent = state.distance;
+  document.getElementById('hud-dist').textContent    = state.distance;
 }
 
 // ─── Game Loop ────────────────────────────────────────────────
@@ -636,15 +609,34 @@ function updateHUD() {
 function update() {
   if (!state.running) return;
 
-  state.scrollY -= state.speed;
-  state.distance = Math.floor(Math.abs(state.scrollY) / 3);
+  state.frameCount++;
+  handleInput();
 
+  // Scroll all rows downward
+  for (const row of state.rows) {
+    row.y += state.speed;
+  }
+
+  // Track distance
+  state.distAccum += state.speed;
+  state.distance = Math.floor(state.distAccum / 3);
+
+  // Remove rows that scrolled off the bottom
+  while (state.rows.length > 0 && state.rows[state.rows.length - 1].y > CANVAS_H + CELL) {
+    state.rows.pop();
+  }
+
+  // Spawn new rows at the top as needed
+  while (state.rows.length === 0 || state.rows[0].y > -CELL) {
+    spawnRow();
+  }
+
+  // Invincibility flash
   if (state.invincibleTimer > 0) {
     state.invincibleTimer--;
     state.flash += 0.3;
   }
 
-  generateNewRows();
   checkCollisions();
   updateHUD();
 }
@@ -652,7 +644,7 @@ function update() {
 function draw() {
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
   drawWater();
-  drawObstacles();
+  drawRows();
   drawBoat();
   drawParticles();
   drawPyramidProgress();
