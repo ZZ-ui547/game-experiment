@@ -8,9 +8,10 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   html, body {
-    background: #1a0a00;
+    background: #0a0a12;
     color: #e8d5a3;
     font-family: 'Georgia', serif;
+    width: 100%;
     height: 100%;
     overflow: hidden;
     touch-action: none;
@@ -21,38 +22,32 @@
   body {
     display: flex;
     flex-direction: column;
-    align-items: center;
-  }
-
-  h1 {
-    font-size: 1.3rem;
-    margin: 6px 0 2px;
-    letter-spacing: 2px;
-    text-shadow: 0 0 10px #c4943a;
   }
 
   #hud {
     display: flex;
     gap: 16px;
     font-size: 0.85rem;
-    margin-bottom: 4px;
+    padding: 4px 12px;
     flex-wrap: wrap;
     justify-content: center;
+    background: rgba(0,0,0,0.6);
+    z-index: 5;
+    flex-shrink: 0;
   }
   #hud span { text-shadow: 0 0 6px #c4943a; }
 
   #game-container {
     position: relative;
-    border: 3px solid #c4943a;
-    border-radius: 4px;
+    flex: 1;
     overflow: hidden;
     touch-action: none;
-    /* width set by JS to fill available space */
   }
 
   canvas {
     display: block;
-    background: #1b4d6e;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
     width: 100%;
     height: 100%;
   }
@@ -64,7 +59,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    background: rgba(10, 5, 0, 0.85);
+    background: rgba(10, 5, 0, 0.88);
     z-index: 10;
     padding: 16px;
   }
@@ -81,7 +76,7 @@
     margin-bottom: 16px;
     text-align: center;
     line-height: 1.5;
-    max-width: 280px;
+    max-width: 320px;
   }
 
   #overlay button {
@@ -100,20 +95,25 @@
   #overlay button:hover { background: #e0b050; }
 
   #controls-hint {
-    margin-top: 6px;
-    font-size: 0.75rem;
-    opacity: 0.5;
+    position: absolute;
+    bottom: 8px;
+    left: 0;
+    right: 0;
+    font-size: 0.7rem;
+    opacity: 0.4;
     text-align: center;
+    z-index: 2;
+    pointer-events: none;
   }
 </style>
 </head>
 <body>
 
-<h1>Stones of the Nile</h1>
 <div id="hud">
   <span>Stones: <b id="hud-stones">10</b></span>
   <span>Pyramid: <b id="hud-pyramid">0</b>/30</span>
   <span>Distance: <b id="hud-dist">0</b>m</span>
+  <span>Speed: <b id="hud-speed">1</b></span>
 </div>
 
 <div id="game-container">
@@ -129,58 +129,50 @@
     </p>
     <button id="overlay-btn">Set Sail!</button>
   </div>
-</div>
 
-<div id="controls-hint"></div>
+  <div id="controls-hint"></div>
+</div>
 
 <script>
 // ─── Config ───────────────────────────────────────────────────
-const COLS = 3;
-const ROWS = 9;
-
-const SCROLL_SPEED   = 1.5;
-const BOOST_MULT     = 2.5;
-const OBSTACLE_FREQ  = 0.30;
-const BONUS_FREQ     = 0.10;
-const STONES_START   = 10;
-const PYRAMID_GOAL   = 30;
+const CELL          = 48;   // fixed pixel-art cell size
+const SCROLL_SPEED  = 1.2;
+const BOOST_MULT    = 2.5;
+const STONES_START  = 10;
+const PYRAMID_GOAL  = 30;
 const DELIVERY_INTERVAL = 500;
 
+// Difficulty scaling (ramps with distance)
+const BASE_OBSTACLE_FREQ = 0.18;
+const MAX_OBSTACLE_FREQ  = 0.55;
+const FREQ_RAMP_DIST     = 3000; // distance over which freq maxes out
+const BASE_SPEED_MULT    = 1.0;
+const MAX_SPEED_MULT     = 2.2;
+const SPEED_RAMP_DIST    = 4000;
+const BONUS_FREQ         = 0.10;
+
 // ─── Responsive Canvas Setup ─────────────────────────────────
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+const canvas    = document.getElementById('game');
+const ctx       = canvas.getContext('2d');
 const container = document.getElementById('game-container');
 
-let CELL, CANVAS_W, CANVAS_H;
+let COLS, ROWS, CANVAS_W, CANVAS_H;
 
 function resizeCanvas() {
-  const header = document.querySelector('h1');
-  const hud = document.getElementById('hud');
-  const hint = document.getElementById('controls-hint');
-  const headerH = header.offsetHeight + hud.offsetHeight + hint.offsetHeight + 24;
-  const maxH = window.innerHeight - headerH;
-  const maxW = window.innerWidth - 16; // 8px padding each side
+  const contW = container.clientWidth;
+  const contH = container.clientHeight;
 
-  // Compute cell size: fill width, but cap so height fits screen
-  let cell = Math.floor(maxW / COLS);
-  if (cell * ROWS > maxH) {
-    cell = Math.floor(maxH / ROWS);
-  }
-  // Reasonable bounds
-  cell = Math.max(48, Math.min(cell, 120));
+  COLS = Math.max(5, Math.floor(contW / CELL));
+  ROWS = Math.max(8, Math.floor(contH / CELL) + 2);
 
-  CELL = cell;
   CANVAS_W = COLS * CELL;
   CANVAS_H = ROWS * CELL;
 
-  canvas.width = CANVAS_W;
+  canvas.width  = CANVAS_W;
   canvas.height = CANVAS_H;
-  container.style.width = CANVAS_W + 'px';
-  container.style.height = CANVAS_H + 'px';
 
-  // Update boat position if game is running
   if (state) {
-    state.boatScreenY = CANVAS_H - CELL * 1.5;
+    state.boatScreenY = CANVAS_H - CELL * 2;
   }
 }
 
@@ -189,7 +181,18 @@ const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 document.getElementById('controls-hint').textContent =
   isTouchDevice
     ? 'Tap a lane to steer \u2022 Swipe up to boost'
-    : 'Arrow keys or A/D to steer \u2022 Space to boost';
+    : 'Arrow keys / A-D to steer \u2022 Space to boost';
+
+// ─── Difficulty helpers ───────────────────────────────────────
+function currentObstacleFreq() {
+  const t = Math.min(1, state.distance / FREQ_RAMP_DIST);
+  return BASE_OBSTACLE_FREQ + (MAX_OBSTACLE_FREQ - BASE_OBSTACLE_FREQ) * t;
+}
+
+function currentSpeedMult() {
+  const t = Math.min(1, state.distance / SPEED_RAMP_DIST);
+  return BASE_SPEED_MULT + (MAX_SPEED_MULT - BASE_SPEED_MULT) * t;
+}
 
 // ─── State ────────────────────────────────────────────────────
 let state;
@@ -200,8 +203,8 @@ function resetGame() {
     gameOver: false,
     won: false,
     speed: SCROLL_SPEED,
-    boatLane: 1,
-    boatScreenY: CANVAS_H - CELL * 1.5,
+    boatLane: Math.floor((COLS || 5) / 2),
+    boatScreenY: CANVAS_H - CELL * 2,
     stones: STONES_START,
     pyramidStones: 0,
     distance: 0,
@@ -212,34 +215,61 @@ function resetGame() {
     flash: 0,
     particles: [],
     frameCount: 0,
+    touchLane: null,
   };
-  for (let i = 0; i < ROWS + 2; i++) {
-    state.rows.push({ y: -CELL + i * CELL, cells: [null, null, null] });
+  // Pre-fill rows with empty water
+  for (let i = 0; i < ROWS + 4; i++) {
+    state.rows.push({ y: -CELL * 2 + i * CELL, cells: emptyRow() });
   }
+}
+
+function emptyRow() {
+  const cells = [];
+  for (let c = 0; c < COLS; c++) cells.push(null);
+  return cells;
 }
 
 // ─── Row Generation ───────────────────────────────────────────
 
 function makeObstacleRow() {
-  const cells = [null, null, null];
+  const cells = [];
+  const freq = currentObstacleFreq();
   for (let c = 0; c < COLS; c++) {
     const r = Math.random();
-    if (r < OBSTACLE_FREQ) {
+    if (r < freq) {
       const types = ['rock', 'hippo', 'croc'];
-      cells[c] = types[Math.floor(Math.random() * types.length)];
-    } else if (r < OBSTACLE_FREQ + BONUS_FREQ) {
-      cells[c] = 'stone';
+      cells.push(types[Math.floor(Math.random() * types.length)]);
+    } else if (r < freq + BONUS_FREQ) {
+      cells.push('stone');
+    } else {
+      cells.push(null);
     }
   }
+  // Ensure at least one safe lane
   const blocked = cells.filter(c => c && c !== 'stone').length;
-  if (blocked === COLS) {
-    cells[Math.floor(Math.random() * COLS)] = null;
+  if (blocked >= COLS) {
+    // Clear a random cell
+    const idx = Math.floor(Math.random() * COLS);
+    cells[idx] = null;
+  }
+  // Also ensure at least 2 clear for wider grids
+  if (COLS >= 5) {
+    let clear = cells.filter(c => !c || c === 'stone').length;
+    while (clear < 2) {
+      const idx = Math.floor(Math.random() * COLS);
+      if (cells[idx] && cells[idx] !== 'stone') {
+        cells[idx] = null;
+        clear++;
+      }
+    }
   }
   return cells;
 }
 
 function makeDeliveryRow() {
-  return ['delivery', 'delivery', 'delivery'];
+  const cells = [];
+  for (let c = 0; c < COLS; c++) cells.push('delivery');
+  return cells;
 }
 
 function spawnRow() {
@@ -256,59 +286,159 @@ function spawnRow() {
   state.rows.unshift({ y, cells });
 }
 
-// ─── Drawing ──────────────────────────────────────────────────
+// ─── Pixel Art Drawing ───────────────────────────────────────
+
+// Pixel helper: draw a small grid of colored pixels scaled to cell
+function drawPixels(pixels, ox, oy, pxSize) {
+  for (let r = 0; r < pixels.length; r++) {
+    for (let c = 0; c < pixels[r].length; c++) {
+      const col = pixels[r][c];
+      if (!col) continue;
+      ctx.fillStyle = col;
+      ctx.fillRect(ox + c * pxSize, oy + r * pxSize, pxSize, pxSize);
+    }
+  }
+}
+
+// Color palette
+const C = {
+  brown:  '#8B5E3C',
+  dkBrn:  '#5a3a1e',
+  hull:   '#a67c52',
+  sail:   '#f5f0e0',
+  gold:   '#c4943a',
+  stone:  '#888888',
+  dkStone:'#666666',
+  red:    '#cc3333',
+  hippo:  '#7a6688',
+  croc:   '#4a8844',
+  water1: '#1b5d7e',
+  water2: '#164d6a',
+  blue:   '#66ccff',
+  sand:   '#c4a35a',
+  gem:    '#44aaff',
+  gemHi:  '#88ccff',
+  white:  '#ffffff',
+  dkGold: '#a07020',
+  delBg:  'rgba(196, 148, 58, 0.25)',
+};
+
+// Rock sprite (8x8)
+const ROCK_SPRITE = [
+  [0,0,0,'#999',C.stone,0,0,0],
+  [0,0,'#999',C.stone,C.stone,C.dkStone,0,0],
+  [0,'#aaa',C.stone,C.stone,C.dkStone,C.dkStone,'#555',0],
+  ['#999',C.stone,C.dkStone,C.stone,C.stone,C.dkStone,C.dkStone,0],
+  ['#aaa',C.stone,C.stone,C.dkStone,C.dkStone,C.stone,'#555',0],
+  [0,C.stone,C.dkStone,C.dkStone,C.stone,C.dkStone,0,0],
+  [0,0,C.dkStone,C.stone,C.dkStone,'#555',0,0],
+  [0,0,0,C.dkStone,'#555',0,0,0],
+];
+
+// Hippo sprite (8x8)
+const HIPPO_SPRITE = [
+  [0,0,C.hippo,C.hippo,C.hippo,C.hippo,0,0],
+  [0,C.hippo,'#9988aa',C.hippo,C.hippo,'#9988aa',C.hippo,0],
+  [0,C.hippo,C.white,C.hippo,C.hippo,C.white,C.hippo,0],
+  [C.hippo,C.hippo,C.hippo,C.hippo,C.hippo,C.hippo,C.hippo,C.hippo],
+  [C.hippo,'#8877aa',C.hippo,C.hippo,C.hippo,C.hippo,'#8877aa',C.hippo],
+  [0,C.hippo,C.hippo,'#9988aa','#9988aa',C.hippo,C.hippo,0],
+  [0,0,C.hippo,C.hippo,C.hippo,C.hippo,0,0],
+  [0,0,'#665577',0,0,'#665577',0,0],
+];
+
+// Croc sprite (8x8)
+const CROC_SPRITE = [
+  [0,0,0,C.croc,C.croc,0,0,0],
+  [0,0,C.croc,'#5aa855',C.croc,C.croc,0,0],
+  [0,C.croc,C.white,C.croc,C.croc,C.red,C.croc,0],
+  [C.croc,C.croc,C.croc,C.croc,C.croc,C.croc,C.croc,C.croc],
+  [0,'#3a6634',C.croc,C.croc,C.croc,C.croc,'#3a6634',0],
+  [0,0,'#3a6634',C.croc,C.croc,'#3a6634',0,0],
+  [0,0,0,'#3a6634','#3a6634',0,0,0],
+  [0,0,0,0,0,0,0,0],
+];
+
+// Gem/stone sprite (8x8)
+const GEM_SPRITE = [
+  [0,0,0,C.gemHi,0,0,0,0],
+  [0,0,C.gemHi,C.gem,C.gemHi,0,0,0],
+  [0,C.blue,C.gem,C.gem,C.gem,C.blue,0,0],
+  [C.blue,C.gem,C.gemHi,C.gem,C.gem,C.gem,C.blue,0],
+  [0,C.blue,C.gem,C.gem,C.gemHi,C.blue,0,0],
+  [0,0,C.blue,C.gem,C.blue,0,0,0],
+  [0,0,0,C.blue,0,0,0,0],
+  [0,0,0,0,0,0,0,0],
+];
+
+// Boat sprite (10x12)
+const BOAT_SPRITE = [
+  [0,0,0,0,C.dkBrn,0,0,0,0,0],
+  [0,0,0,0,C.dkBrn,C.sail,0,0,0,0],
+  [0,0,0,0,C.dkBrn,C.sail,C.sail,0,0,0],
+  [0,0,0,0,C.dkBrn,C.sail,C.sail,C.sail,0,0],
+  [0,0,0,0,C.dkBrn,C.gold,C.sail,C.sail,0,0],
+  [0,0,0,0,C.dkBrn,C.sail,C.sail,0,0,0],
+  [0,0,0,0,C.dkBrn,C.sail,0,0,0,0],
+  [0,0,C.hull,C.hull,C.hull,C.hull,C.hull,C.hull,0,0],
+  [0,C.hull,C.stone,C.stone,C.hull,C.hull,C.stone,C.hull,C.hull,0],
+  [0,C.brown,C.brown,C.brown,C.brown,C.brown,C.brown,C.brown,C.brown,0],
+  [0,0,C.brown,C.brown,C.brown,C.brown,C.brown,C.brown,0,0],
+  [0,0,0,C.dkBrn,C.dkBrn,C.dkBrn,C.dkBrn,0,0,0],
+];
+
+function drawSprite(sprite, cx, cy, scale) {
+  const rows = sprite.length;
+  const cols = sprite[0].length;
+  const ox = cx - (cols * scale) / 2;
+  const oy = cy - (rows * scale) / 2;
+  drawPixels(sprite, ox, oy, scale);
+}
+
+// ─── Water & Background ──────────────────────────────────────
 
 function drawWater() {
-  ctx.fillStyle = '#1b5d7e';
+  ctx.fillStyle = C.water1;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  ctx.strokeStyle = 'rgba(100, 200, 235, 0.15)';
-  ctx.lineWidth = 2;
-  const waveOff = (state.frameCount * 0.8) % 40;
-  for (let y = -40 + waveOff; y < CANVAS_H + 40; y += 40) {
-    ctx.beginPath();
-    for (let x = 0; x <= CANVAS_W; x += 4) {
-      const yy = y + Math.sin((x + state.frameCount * 0.6) * 0.05) * 6;
-      x === 0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+  // Pixel-style wave lines
+  const waveOff = (state.frameCount * 0.6) % 32;
+  ctx.fillStyle = 'rgba(100, 200, 235, 0.08)';
+  for (let y = -32 + waveOff; y < CANVAS_H + 32; y += 32) {
+    for (let x = 0; x < CANVAS_W; x += 8) {
+      const shimmer = Math.sin((x + state.frameCount * 0.4) * 0.08) * 3;
+      ctx.fillRect(x, y + shimmer, 6, 2);
     }
-    ctx.stroke();
   }
 
-  const bankW = Math.max(6, CELL * 0.12);
-  const g1 = ctx.createLinearGradient(0, 0, bankW, 0);
-  g1.addColorStop(0, '#c4a35a');
-  g1.addColorStop(1, 'rgba(196,163,90,0)');
-  ctx.fillStyle = g1;
-  ctx.fillRect(0, 0, bankW, CANVAS_H);
+  // Sandy banks
+  const bankW = 6;
+  ctx.fillStyle = C.sand;
+  for (let y = 0; y < CANVAS_H; y += 4) {
+    const w = bankW + Math.sin(y * 0.1 + state.frameCount * 0.02) * 2;
+    ctx.fillRect(0, y, w, 4);
+    ctx.fillRect(CANVAS_W - w, y, w, 4);
+  }
 
-  const g2 = ctx.createLinearGradient(CANVAS_W - bankW, 0, CANVAS_W, 0);
-  g2.addColorStop(0, 'rgba(196,163,90,0)');
-  g2.addColorStop(1, '#c4a35a');
-  ctx.fillStyle = g2;
-  ctx.fillRect(CANVAS_W - bankW, 0, bankW, CANVAS_H);
-
-  ctx.strokeStyle = 'rgba(100, 200, 235, 0.08)';
-  ctx.setLineDash([8, 8]);
+  // Lane dividers (dotted pixel lines)
+  ctx.fillStyle = 'rgba(100, 200, 235, 0.06)';
   for (let c = 1; c < COLS; c++) {
-    ctx.beginPath();
-    ctx.moveTo(c * CELL, 0);
-    ctx.lineTo(c * CELL, CANVAS_H);
-    ctx.stroke();
+    for (let y = 0; y < CANVAS_H; y += 12) {
+      ctx.fillRect(c * CELL - 1, y, 2, 6);
+    }
   }
-  ctx.setLineDash([]);
 }
 
-function drawEmoji(emoji, x, y, size) {
-  ctx.font = size + 'px serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(emoji, x, y);
+function drawLaneHighlight() {
+  if (state.touchLane == null) return;
+  ctx.fillStyle = 'rgba(196, 148, 58, 0.12)';
+  ctx.fillRect(state.touchLane * CELL, 0, CELL, CANVAS_H);
 }
+
+// ─── Draw Rows ───────────────────────────────────────────────
 
 function drawRows() {
-  const emojiSize = Math.round(CELL * 0.5);
-  const smallEmoji = Math.round(CELL * 0.39);
-  const labelSize = Math.round(CELL * 0.14);
+  const pxScale = Math.floor(CELL / 10); // each sprite pixel = ~4-5 canvas pixels
 
   for (const row of state.rows) {
     if (row.y < -CELL || row.y > CANVAS_H + CELL) continue;
@@ -321,92 +451,60 @@ function drawRows() {
       const cy = row.y + CELL / 2;
 
       if (cell === 'rock') {
-        drawEmoji('\u{1FAA8}', cx, cy, emojiSize);
+        drawSprite(ROCK_SPRITE, cx, cy, pxScale);
       } else if (cell === 'hippo') {
-        drawEmoji('\u{1F99B}', cx, cy, emojiSize);
+        drawSprite(HIPPO_SPRITE, cx, cy, pxScale);
       } else if (cell === 'croc') {
-        drawEmoji('\u{1F40A}', cx, cy, emojiSize);
+        drawSprite(CROC_SPRITE, cx, cy, pxScale);
       } else if (cell === 'stone') {
-        drawEmoji('\u{1F48E}', cx, cy, smallEmoji);
-        ctx.fillStyle = 'rgba(100, 200, 255, 0.15)';
-        ctx.beginPath();
-        ctx.arc(cx, cy, CELL * 0.28, 0, Math.PI * 2);
-        ctx.fill();
+        // Pulsing glow
+        const pulse = 0.6 + 0.4 * Math.sin(state.frameCount * 0.08 + c);
+        ctx.fillStyle = `rgba(100, 200, 255, ${0.12 * pulse})`;
+        ctx.fillRect(cx - CELL * 0.3, cy - CELL * 0.3, CELL * 0.6, CELL * 0.6);
+        drawSprite(GEM_SPRITE, cx, cy, pxScale);
       } else if (cell === 'delivery') {
-        ctx.fillStyle = 'rgba(196, 148, 58, 0.3)';
+        // Delivery zone
+        ctx.fillStyle = C.delBg;
         ctx.fillRect(c * CELL, row.y, CELL, CELL);
-        drawEmoji('\u{1F3D7}\uFE0F', cx, cy - CELL * 0.08, smallEmoji);
-        ctx.fillStyle = '#e8d5a3';
-        ctx.font = labelSize + 'px Georgia';
+        // Pyramid icon (simple pixel triangle)
+        const triH = CELL * 0.4;
+        const triW = CELL * 0.5;
+        ctx.fillStyle = C.gold;
+        for (let py = 0; py < triH; py += pxScale) {
+          const w = triW * (py / triH);
+          ctx.fillRect(cx - w / 2, cy - triH / 2 + py, w, pxScale);
+        }
+        // Label
+        ctx.fillStyle = C.gold;
+        ctx.font = (pxScale * 2) + 'px Georgia';
         ctx.textAlign = 'center';
-        ctx.fillText('DELIVER', cx, cy + CELL * 0.3);
+        ctx.textBaseline = 'top';
+        ctx.fillText('DELIVER', cx, cy + triH * 0.3);
       }
     }
   }
 }
+
+// ─── Draw Boat ───────────────────────────────────────────────
 
 function drawBoat() {
   if (state.invincibleTimer > 0 && Math.floor(state.flash) % 2 === 0) return;
 
   const bx = state.boatLane * CELL + CELL / 2;
   const by = state.boatScreenY;
-  const s = CELL / 72; // scale factor relative to original 72px cell
+  const pxScale = Math.floor(CELL / 12);
 
-  // Hull
-  ctx.fillStyle = '#8B5E3C';
-  ctx.beginPath();
-  ctx.moveTo(bx - 22 * s, by + 10 * s);
-  ctx.lineTo(bx + 22 * s, by + 10 * s);
-  ctx.lineTo(bx + 16 * s, by + 22 * s);
-  ctx.lineTo(bx - 16 * s, by + 22 * s);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = '#5a3a1e';
-  ctx.lineWidth = 1.5 * s;
-  ctx.stroke();
+  drawSprite(BOAT_SPRITE, bx, by, pxScale);
 
-  // Deck
-  ctx.fillStyle = '#a67c52';
-  ctx.fillRect(bx - 18 * s, by - 2 * s, 36 * s, 14 * s);
-
-  // Stones cargo
+  // Show cargo count
   const shown = Math.min(state.stones, 5);
+  ctx.fillStyle = C.stone;
   for (let i = 0; i < shown; i++) {
-    ctx.fillStyle = '#888';
-    ctx.beginPath();
-    ctx.arc(bx - 12 * s + i * 6 * s, by + 4 * s, 4 * s, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#666';
-    ctx.lineWidth = 0.5 * s;
-    ctx.stroke();
+    ctx.fillRect(bx - 8 * pxScale / 2 + i * pxScale * 2, by + 2 * pxScale, pxScale, pxScale);
   }
-
-  // Sail
-  ctx.fillStyle = '#f5f0e0';
-  ctx.beginPath();
-  ctx.moveTo(bx, by - 28 * s);
-  ctx.lineTo(bx + 16 * s, by - 4 * s);
-  ctx.lineTo(bx, by - 2 * s);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = '#c4943a';
-  ctx.lineWidth = 1 * s;
-  ctx.stroke();
-
-  // Mast
-  ctx.strokeStyle = '#5a3a1e';
-  ctx.lineWidth = 2 * s;
-  ctx.beginPath();
-  ctx.moveTo(bx, by - 30 * s);
-  ctx.lineTo(bx, by + 10 * s);
-  ctx.stroke();
-
-  // Eye of Horus
-  ctx.fillStyle = '#c4943a';
-  ctx.font = Math.round(12 * s) + 'px serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('\u{13080}', bx + 6 * s, by - 12 * s);
 }
+
+// ─── Particles ────────────────────────────────────────────────
 
 function drawParticles() {
   for (let i = state.particles.length - 1; i >= 0; i--) {
@@ -417,59 +515,83 @@ function drawParticles() {
     if (p.life <= 0) { state.particles.splice(i, 1); continue; }
     ctx.globalAlpha = p.life;
     ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-    ctx.fill();
+    // Pixelated square particles
+    const sz = Math.max(2, Math.floor(p.size * p.life));
+    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), sz, sz);
   }
   ctx.globalAlpha = 1;
 }
 
 function drawPyramidProgress() {
-  const s = CELL / 72;
-  const px = CANVAS_W - 40 * s;
-  const py = 8 * s;
+  const pad = 8;
+  const pw = 52;
+  const ph = 44;
+  const px = CANVAS_W - pw - pad;
+  const py = pad;
   const progress = state.pyramidStones / PYRAMID_GOAL;
 
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(px - 26 * s, py - 2 * s, 58 * s, 40 * s);
+  ctx.fillRect(px - 4, py - 4, pw + 8, ph + 8);
 
-  ctx.strokeStyle = '#c4943a';
-  ctx.lineWidth = 1.5 * s;
+  // Outline triangle
+  ctx.strokeStyle = C.gold;
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(px, py + 4 * s);
-  ctx.lineTo(px + 18 * s, py + 32 * s);
-  ctx.lineTo(px - 18 * s, py + 32 * s);
+  ctx.moveTo(px + pw / 2, py + 2);
+  ctx.lineTo(px + pw - 4, py + ph - 2);
+  ctx.lineTo(px + 4, py + ph - 2);
   ctx.closePath();
   ctx.stroke();
 
+  // Filled progress
   if (progress > 0) {
-    ctx.fillStyle = '#c4943a';
+    const h = (ph - 6) * Math.min(progress, 1);
+    const topY = py + ph - 2 - h;
+    const halfW = (pw / 2 - 4) * (h / (ph - 6));
+    ctx.fillStyle = C.gold;
     ctx.beginPath();
-    const h = 28 * s * Math.min(progress, 1);
-    const topY = py + 32 * s - h;
-    const halfW = 18 * s * (h / (28 * s));
-    ctx.moveTo(px - halfW, py + 32 * s);
-    ctx.lineTo(px + halfW, py + 32 * s);
-    ctx.lineTo(px + halfW * 0.9, topY);
-    ctx.lineTo(px - halfW * 0.9, topY);
+    ctx.moveTo(px + pw / 2 - halfW, py + ph - 2);
+    ctx.lineTo(px + pw / 2 + halfW, py + ph - 2);
+    ctx.lineTo(px + pw / 2 + halfW * 0.9, topY);
+    ctx.lineTo(px + pw / 2 - halfW * 0.9, topY);
     ctx.closePath();
     ctx.fill();
   }
 }
 
-// ─── Lane highlight on touch ──────────────────────────────────
+// ─── Difficulty indicator ─────────────────────────────────────
+function drawDifficultyBar() {
+  const pad = 8;
+  const barW = 52;
+  const barH = 6;
+  const bx = pad;
+  const by = pad;
 
-function drawLaneHighlight() {
-  if (state.touchLane == null) return;
-  ctx.fillStyle = 'rgba(196, 148, 58, 0.12)';
-  ctx.fillRect(state.touchLane * CELL, 0, CELL, CANVAS_H);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(bx - 2, by - 2, barW + 4, barH + 12);
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '8px Georgia';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('DANGER', bx, by);
+
+  const t = Math.min(1, state.distance / FREQ_RAMP_DIST);
+  ctx.fillStyle = '#333';
+  ctx.fillRect(bx, by + 10, barW, barH);
+  const r = Math.floor(255 * t);
+  const g = Math.floor(100 * (1 - t));
+  ctx.fillStyle = `rgb(${r},${g},0)`;
+  ctx.fillRect(bx, by + 10, barW * t, barH);
 }
 
 // ─── Collision ────────────────────────────────────────────────
 
 function checkCollisions() {
-  const boatTop = state.boatScreenY - 10 * (CELL / 72);
-  const boatBot = state.boatScreenY + 22 * (CELL / 72);
+  const pxScale = Math.floor(CELL / 12);
+  const boatH = BOAT_SPRITE.length * pxScale;
+  const boatTop = state.boatScreenY - boatH / 2 + pxScale * 2;
+  const boatBot = state.boatScreenY + boatH / 2 - pxScale * 2;
 
   for (const row of state.rows) {
     const rowTop = row.y;
@@ -525,13 +647,12 @@ function checkCollisions() {
 
 function spawnHitParticles() {
   const bx = state.boatLane * CELL + CELL / 2;
-  const s = CELL / 72;
   for (let i = 0; i < 12; i++) {
     state.particles.push({
       x: bx, y: state.boatScreenY,
-      vx: (Math.random() - 0.5) * 4 * s,
-      vy: (Math.random() - 0.5) * 4 * s,
-      size: (4 + Math.random() * 4) * s,
+      vx: (Math.random() - 0.5) * 4,
+      vy: (Math.random() - 0.5) * 4,
+      size: 3 + Math.random() * 3,
       life: 1,
       color: '#ff6644',
     });
@@ -540,13 +661,12 @@ function spawnHitParticles() {
 
 function spawnCollectParticles() {
   const bx = state.boatLane * CELL + CELL / 2;
-  const s = CELL / 72;
   for (let i = 0; i < 8; i++) {
     state.particles.push({
       x: bx, y: state.boatScreenY,
-      vx: (Math.random() - 0.5) * 3 * s,
-      vy: -Math.random() * 3 * s,
-      size: (3 + Math.random() * 3) * s,
+      vx: (Math.random() - 0.5) * 3,
+      vy: -Math.random() * 3,
+      size: 2 + Math.random() * 3,
       life: 1,
       color: '#66ccff',
     });
@@ -555,13 +675,12 @@ function spawnCollectParticles() {
 
 function spawnDeliveryParticles() {
   const bx = state.boatLane * CELL + CELL / 2;
-  const s = CELL / 72;
   for (let i = 0; i < 20; i++) {
     state.particles.push({
       x: bx, y: state.boatScreenY,
-      vx: (Math.random() - 0.5) * 5 * s,
-      vy: -Math.random() * 5 * s,
-      size: (3 + Math.random() * 5) * s,
+      vx: (Math.random() - 0.5) * 5,
+      vy: -Math.random() * 5,
+      size: 2 + Math.random() * 4,
       life: 1,
       color: Math.random() > 0.5 ? '#c4943a' : '#e8d5a3',
     });
@@ -583,10 +702,12 @@ let moveCD = 0;
 function handleKeyboard() {
   moveCD = Math.max(0, moveCD - 1);
   if (moveCD === 0) {
-    if (keys['ArrowLeft']  || keys['a'] || keys['A']) { moveBoat(-1); moveCD = 10; }
-    if (keys['ArrowRight'] || keys['d'] || keys['D']) { moveBoat(1);  moveCD = 10; }
+    if (keys['ArrowLeft']  || keys['a'] || keys['A']) { moveBoat(-1); moveCD = 8; }
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) { moveBoat(1);  moveCD = 8; }
   }
-  state.speed = (keys[' '] || keys['ArrowUp']) ? SCROLL_SPEED * BOOST_MULT : SCROLL_SPEED;
+  state.speed = (keys[' '] || keys['ArrowUp'])
+    ? SCROLL_SPEED * currentSpeedMult() * BOOST_MULT
+    : SCROLL_SPEED * currentSpeedMult();
 }
 
 function moveBoat(dir) {
@@ -595,19 +716,16 @@ function moveBoat(dir) {
 }
 
 // ─── Input: Touch ─────────────────────────────────────────────
-// Tap a lane → boat moves there. Swipe left/right → shift one lane.
-// Swipe up → boost while swiping.
 
 let touchStartX = 0;
 let touchStartY = 0;
 let touchStartTime = 0;
 let touchActive = false;
-const SWIPE_THRESHOLD = 30; // px
+const SWIPE_THRESHOLD = 30;
 
 function canvasTouchPos(e) {
   const rect = canvas.getBoundingClientRect();
   const touch = e.changedTouches[0];
-  // Map CSS display coords → canvas internal coords
   const scaleX = CANVAS_W / rect.width;
   const scaleY = CANVAS_H / rect.height;
   return {
@@ -624,10 +742,7 @@ canvas.addEventListener('touchstart', e => {
   touchStartY = pos.y;
   touchStartTime = Date.now();
   touchActive = true;
-
-  // Show lane highlight immediately
-  state.touchLane = Math.floor(pos.x / CELL);
-  state.touchLane = Math.max(0, Math.min(COLS - 1, state.touchLane));
+  state.touchLane = Math.max(0, Math.min(COLS - 1, Math.floor(pos.x / CELL)));
 }, { passive: false });
 
 canvas.addEventListener('touchmove', e => {
@@ -635,24 +750,17 @@ canvas.addEventListener('touchmove', e => {
   if (!touchActive || !state || !state.running) return;
   const pos = canvasTouchPos(e);
   const dy = touchStartY - pos.y;
-
-  // Swipe up → boost
-  if (dy > SWIPE_THRESHOLD) {
-    state.speed = SCROLL_SPEED * BOOST_MULT;
-  } else {
-    state.speed = SCROLL_SPEED;
-  }
-
-  // Update lane highlight
-  state.touchLane = Math.floor(pos.x / CELL);
-  state.touchLane = Math.max(0, Math.min(COLS - 1, state.touchLane));
+  state.speed = dy > SWIPE_THRESHOLD
+    ? SCROLL_SPEED * currentSpeedMult() * BOOST_MULT
+    : SCROLL_SPEED * currentSpeedMult();
+  state.touchLane = Math.max(0, Math.min(COLS - 1, Math.floor(pos.x / CELL)));
 }, { passive: false });
 
 canvas.addEventListener('touchend', e => {
   e.preventDefault();
   if (!touchActive || !state || !state.running) return;
   touchActive = false;
-  state.speed = SCROLL_SPEED;
+  state.speed = SCROLL_SPEED * currentSpeedMult();
   state.touchLane = null;
 
   const pos = canvasTouchPos(e);
@@ -660,29 +768,24 @@ canvas.addEventListener('touchend', e => {
   const dy = touchStartY - pos.y;
   const elapsed = Date.now() - touchStartTime;
 
-  // Swipe detection
   if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
     moveBoat(dx > 0 ? 1 : -1);
     return;
   }
 
-  // Tap detection — move to the tapped lane
   if (elapsed < 300 && Math.abs(dx) < SWIPE_THRESHOLD && Math.abs(dy) < SWIPE_THRESHOLD) {
-    const tappedLane = Math.floor(pos.x / CELL);
-    const clampedLane = Math.max(0, Math.min(COLS - 1, tappedLane));
-    state.boatLane = clampedLane;
+    state.boatLane = Math.max(0, Math.min(COLS - 1, Math.floor(pos.x / CELL)));
   }
 }, { passive: false });
 
-canvas.addEventListener('touchcancel', e => {
+canvas.addEventListener('touchcancel', () => {
   touchActive = false;
   if (state) {
-    state.speed = SCROLL_SPEED;
+    state.speed = SCROLL_SPEED * currentSpeedMult();
     state.touchLane = null;
   }
 });
 
-// Prevent any residual scrolling
 document.addEventListener('touchmove', e => { e.preventDefault(); }, { passive: false });
 
 // ─── Overlay ──────────────────────────────────────────────────
@@ -701,6 +804,7 @@ function showOverlay(title, text, btn) {
 
 overlayBtn.addEventListener('click', () => {
   overlay.classList.add('hidden');
+  resizeCanvas();
   resetGame();
   state.running = true;
 });
@@ -711,6 +815,7 @@ function updateHUD() {
   document.getElementById('hud-stones').textContent  = state.stones;
   document.getElementById('hud-pyramid').textContent = state.pyramidStones;
   document.getElementById('hud-dist').textContent    = state.distance;
+  document.getElementById('hud-speed').textContent   = currentSpeedMult().toFixed(1) + 'x';
 }
 
 // ─── Game Loop ────────────────────────────────────────────────
@@ -728,10 +833,12 @@ function update() {
   state.distAccum += state.speed;
   state.distance = Math.floor(state.distAccum / 3);
 
+  // Remove off-screen rows at bottom
   while (state.rows.length > 0 && state.rows[state.rows.length - 1].y > CANVAS_H + CELL) {
     state.rows.pop();
   }
 
+  // Spawn new rows at top
   while (state.rows.length === 0 || state.rows[0].y > -CELL) {
     spawnRow();
   }
@@ -753,6 +860,7 @@ function draw() {
   drawBoat();
   drawParticles();
   drawPyramidProgress();
+  drawDifficultyBar();
 }
 
 function loop() {
