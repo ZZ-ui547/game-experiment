@@ -230,39 +230,27 @@ function makeObstacleRow() {
   const cells = [null, null, null];
   const types = ['rock', 'hippo', 'croc'];
 
+  // Place at most ONE obstacle per row so at least 2 lanes stay safe.
+  // This guarantees the player can always dodge from any lane.
+  if (Math.random() < OBSTACLE_FREQ) {
+    const lane = Math.floor(Math.random() * COLS);
+    cells[lane] = types[Math.floor(Math.random() * types.length)];
+  }
+
+  // Optionally place a bonus stone in one of the empty lanes
+  const emptyLanes = [];
   for (let c = 0; c < COLS; c++) {
-    const r = Math.random();
-    if (r < OBSTACLE_FREQ) {
-      cells[c] = types[Math.floor(Math.random() * types.length)];
-    } else if (r < OBSTACLE_FREQ + BONUS_FREQ) {
-      cells[c] = 'stone';
-    }
+    if (!cells[c]) emptyLanes.push(c);
+  }
+  if (emptyLanes.length > 0 && Math.random() < BONUS_FREQ) {
+    const pick = emptyLanes[Math.floor(Math.random() * emptyLanes.length)];
+    cells[pick] = 'stone';
   }
 
-  // Build set of reachable lanes (same or adjacent to any previous open lane)
-  const reachable = new Set();
-  for (const ol of state.lastOpenLanes) {
-    for (let d = -1; d <= 1; d++) {
-      const n = ol + d;
-      if (n >= 0 && n < COLS) reachable.add(n);
-    }
-  }
-
-  // Check which reachable lanes are safe (not an obstacle)
-  const isObstacle = c => cells[c] && cells[c] !== 'stone';
-  const safeReachable = [...reachable].filter(c => !isObstacle(c));
-
-  // If no safe reachable lane exists, force-clear one reachable lane
-  if (safeReachable.length === 0) {
-    const arr = [...reachable];
-    const pick = arr[Math.floor(Math.random() * arr.length)];
-    cells[pick] = null;
-  }
-
-  // Update lastOpenLanes: only lanes that are both safe AND reachable
+  // Update lastOpenLanes to all safe lanes (with max 1 obstacle, always ≥ 2)
   state.lastOpenLanes = [];
   for (let c = 0; c < COLS; c++) {
-    if (!isObstacle(c) && reachable.has(c)) state.lastOpenLanes.push(c);
+    if (!(cells[c] && cells[c] !== 'stone')) state.lastOpenLanes.push(c);
   }
 
   return cells;
