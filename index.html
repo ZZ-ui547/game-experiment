@@ -115,6 +115,7 @@
   <span>Pyramid: <b id="hud-pyramid">0</b>/30</span>
   <span>Distance: <b id="hud-dist">0</b>m</span>
   <span>Speed: <b id="hud-speed">1</b></span>
+  <span>Danger: <b id="hud-danger">1</b></span>
 </div>
 
 <div id="game-container">
@@ -145,11 +146,16 @@ const PYRAMID_GOAL  = 30;
 const DELIVERY_INTERVAL = 500;
 
 // Difficulty scaling (ramps with distance)
-const OBSTACLE_FREQ = 0.30;
-const BONUS_FREQ    = 0.10;
-const BASE_SPEED_MULT  = 1.0;
-const MAX_SPEED_MULT   = 2.5;
-const SPEED_RAMP_DIST  = 4000;
+const BASE_OBSTACLE_FREQ = 0.30;   // starting obstacle-per-row chance
+const MAX_OBSTACLE_FREQ  = 0.75;   // max obstacle-per-row chance
+const BASE_BONUS_FREQ    = 0.12;   // starting bonus chance
+const MAX_BONUS_FREQ     = 0.35;   // max bonus chance (compensates harder obstacles)
+const DOUBLE_OBS_START   = 1200;   // distance where 2-obstacle rows can begin
+const MAX_DOUBLE_CHANCE  = 0.45;   // max chance of a 2nd obstacle in one row
+const DIFF_RAMP_DIST     = 4000;   // distance over which difficulty fully ramps
+const BASE_SPEED_MULT    = 1.0;
+const MAX_SPEED_MULT     = 2.5;
+const SPEED_RAMP_DIST    = 4000;
 
 // ─── Responsive Canvas Setup ─────────────────────────────────
 const canvas    = document.getElementById('game');
@@ -188,6 +194,24 @@ document.getElementById('controls-hint').textContent =
 function currentSpeedMult() {
   const t = Math.min(1, state.distance / SPEED_RAMP_DIST);
   return BASE_SPEED_MULT + (MAX_SPEED_MULT - BASE_SPEED_MULT) * t;
+}
+
+function difficultyT() {
+  return Math.min(1, state.distance / DIFF_RAMP_DIST);
+}
+
+function currentObstacleFreq() {
+  return BASE_OBSTACLE_FREQ + (MAX_OBSTACLE_FREQ - BASE_OBSTACLE_FREQ) * difficultyT();
+}
+
+function currentBonusFreq() {
+  return BASE_BONUS_FREQ + (MAX_BONUS_FREQ - BASE_BONUS_FREQ) * difficultyT();
+}
+
+function currentDoubleChance() {
+  if (state.distance < DOUBLE_OBS_START) return 0;
+  const t = Math.min(1, (state.distance - DOUBLE_OBS_START) / (DIFF_RAMP_DIST - DOUBLE_OBS_START));
+  return MAX_DOUBLE_CHANCE * t;
 }
 
 // ─── State ────────────────────────────────────────────────────
@@ -233,11 +257,21 @@ function makeObstacleRow() {
   const cells = [null, null, null];
   const types = ['rock', 'hippo', 'croc'];
 
-  // Place at most ONE obstacle per row so at least 2 lanes stay safe.
-  // This guarantees the player can always dodge from any lane.
-  if (Math.random() < OBSTACLE_FREQ) {
+  // Place first obstacle based on current difficulty
+  if (Math.random() < currentObstacleFreq()) {
     const lane = Math.floor(Math.random() * COLS);
     cells[lane] = types[Math.floor(Math.random() * types.length)];
+
+    // Potentially place a second obstacle (always keep at least 1 lane safe)
+    if (Math.random() < currentDoubleChance()) {
+      const free = [];
+      for (let c = 0; c < COLS; c++) { if (!cells[c]) free.push(c); }
+      // Only add 2nd obstacle if 2+ lanes are still free (keep 1 safe)
+      if (free.length >= 2) {
+        const pick = free[Math.floor(Math.random() * free.length)];
+        cells[pick] = types[Math.floor(Math.random() * types.length)];
+      }
+    }
   }
 
   // Optionally place a bonus stone in one of the empty lanes
@@ -245,12 +279,12 @@ function makeObstacleRow() {
   for (let c = 0; c < COLS; c++) {
     if (!cells[c]) emptyLanes.push(c);
   }
-  if (emptyLanes.length > 0 && Math.random() < BONUS_FREQ) {
+  if (emptyLanes.length > 0 && Math.random() < currentBonusFreq()) {
     const pick = emptyLanes[Math.floor(Math.random() * emptyLanes.length)];
     cells[pick] = 'stone';
   }
 
-  // Update lastOpenLanes to all safe lanes (with max 1 obstacle, always ≥ 2)
+  // Update lastOpenLanes to all safe lanes (always ≥ 1)
   state.lastOpenLanes = [];
   for (let c = 0; c < COLS; c++) {
     if (!(cells[c] && cells[c] !== 'stone')) state.lastOpenLanes.push(c);
@@ -810,6 +844,8 @@ function updateHUD() {
   document.getElementById('hud-pyramid').textContent = state.pyramidStones;
   document.getElementById('hud-dist').textContent    = state.distance;
   document.getElementById('hud-speed').textContent   = currentSpeedMult().toFixed(1) + 'x';
+  const dangerLvl = Math.floor(1 + difficultyT() * 9);
+  document.getElementById('hud-danger').textContent  = dangerLvl + '/10';
 }
 
 // ─── Game Loop ────────────────────────────────────────────────
