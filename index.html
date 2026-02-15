@@ -773,6 +773,26 @@ function checkCollisions() {
   }
 }
 
+// ─── Clear jumped obstacles on landing ─────────────────────────
+
+function clearObstaclesUnderBoat() {
+  const pxScale = Math.floor(CELL / 12);
+  const boatH = BOAT_SPRITE.length * pxScale;
+  const boatTop = state.boatScreenY - boatH / 2;
+  const boatBot = state.boatScreenY + boatH / 2;
+
+  for (const row of state.rows) {
+    const rowTop = row.y;
+    const rowBot = row.y + CELL;
+    if (rowBot < boatTop || rowTop > boatBot) continue;
+
+    const cell = row.cells[state.boatLane];
+    if (cell === 'rock' || cell === 'hippo' || cell === 'croc') {
+      row.cells[state.boatLane] = null;
+    }
+  }
+}
+
 // ─── Particles ────────────────────────────────────────────────
 
 function spawnHitParticles() {
@@ -1187,15 +1207,22 @@ function update() {
     state.flash += 0.3;
   }
 
+  // Check collisions BEFORE decrementing jump timer so the last
+  // airborne frame still has immunity (jumpTimer > 0).
+  checkCollisions();
+
   // Jump timers
   if (state.jumpTimer > 0) {
     state.jumpTimer--;
-    if (state.jumpTimer === 0) state.jumpCooldown = JUMP_COOLDOWN;
+    if (state.jumpTimer === 0) {
+      state.jumpCooldown = JUMP_COOLDOWN;
+      // Clear any obstacles still overlapping the boat on landing,
+      // since the jump arc doesn't move them fully past the hitbox.
+      clearObstaclesUnderBoat();
+    }
   } else if (state.jumpCooldown > 0) {
     state.jumpCooldown--;
   }
-
-  checkCollisions();
   updateHUD();
 }
 
