@@ -146,15 +146,15 @@ const PYRAMID_GOAL  = 30;
 const DELIVERY_INTERVAL = 500;
 
 // Difficulty scaling (ramps with distance)
-const BASE_OBSTACLE_FREQ = 0.30;   // starting obstacle-per-row chance
-const MAX_OBSTACLE_FREQ  = 0.75;   // max obstacle-per-row chance
+const BASE_OBSTACLE_FREQ = 0.45;   // starting obstacle-per-row chance
+const MAX_OBSTACLE_FREQ  = 0.68;   // max obstacle-per-row chance
 const BASE_BONUS_FREQ    = 0.12;   // starting bonus chance
 const MAX_BONUS_FREQ     = 0.35;   // max bonus chance (compensates harder obstacles)
-const DOUBLE_OBS_START   = 1200;   // distance where 2-obstacle rows can begin
-const MAX_DOUBLE_CHANCE  = 0.45;   // max chance of a 2nd obstacle in one row
+const DOUBLE_OBS_START   = 400;    // distance where 2-obstacle rows can begin
+const MAX_DOUBLE_CHANCE  = 0.35;   // max chance of a 2nd obstacle in one row
 const DIFF_RAMP_DIST     = 4000;   // distance over which difficulty fully ramps
 const BASE_SPEED_MULT    = 1.0;
-const MAX_SPEED_MULT     = 2.5;
+const MAX_SPEED_MULT     = 2.0;
 const SPEED_RAMP_DIST    = 4000;
 
 // ─── Responsive Canvas Setup ─────────────────────────────────
@@ -197,7 +197,8 @@ function currentSpeedMult() {
 }
 
 function difficultyT() {
-  return Math.min(1, state.distance / DIFF_RAMP_DIST);
+  const t = Math.min(1, state.distance / DIFF_RAMP_DIST);
+  return 1 - (1 - t) * (1 - t);  // ease-out: ramps faster early, flattens late
 }
 
 function currentObstacleFreq() {
@@ -211,7 +212,8 @@ function currentBonusFreq() {
 function currentDoubleChance() {
   if (state.distance < DOUBLE_OBS_START) return 0;
   const t = Math.min(1, (state.distance - DOUBLE_OBS_START) / (DIFF_RAMP_DIST - DOUBLE_OBS_START));
-  return MAX_DOUBLE_CHANCE * t;
+  const tEased = 1 - (1 - t) * (1 - t);  // ease-out to match obstacle ramp
+  return MAX_DOUBLE_CHANCE * tEased;
 }
 
 // ─── State ────────────────────────────────────────────────────
