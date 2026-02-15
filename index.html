@@ -133,7 +133,7 @@
     <p id="overlay-text">
       Sail your boat down the Nile and deliver stones to build the Great Pyramid!<br><br>
       Avoid rocks, hippos and crocodiles.<br>
-      Jump over obstacles to clear them!<br>
+      Jump over hippos and crocs (not rocks!).<br>
       Collect bonus stones along the way.<br><br>
       Tap a lane or swipe to steer. Swipe up to jump.
     </p>
@@ -730,7 +730,8 @@ function checkCollisions() {
     if (!cell) continue;
 
     if (cell === 'rock' || cell === 'hippo' || cell === 'croc') {
-      if (state.jumpTimer > 0) return; // airborne — sail over obstacles
+      // Can only jump over hippos and crocs, not rocks
+      if (state.jumpTimer > 0 && cell !== 'rock') return;
       if (state.invincibleTimer <= 0) {
         state.lives--;
         state.invincibleTimer = 90;
@@ -787,7 +788,7 @@ function clearObstaclesUnderBoat() {
     if (rowBot < boatTop || rowTop > boatBot) continue;
 
     const cell = row.cells[state.boatLane];
-    if (cell === 'rock' || cell === 'hippo' || cell === 'croc') {
+    if (cell === 'hippo' || cell === 'croc') {
       row.cells[state.boatLane] = null;
     }
   }
