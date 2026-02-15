@@ -257,19 +257,51 @@ function makeObstacleRow() {
   const cells = [null, null, null];
   const types = ['rock', 'hippo', 'croc'];
 
+  // Build the set of lanes reachable from previous row's open lanes
+  // (same lane or ±1 — the boat can move one lane per row)
+  const reachable = new Set();
+  for (const lane of state.lastOpenLanes) {
+    if (lane > 0)        reachable.add(lane - 1);
+    reachable.add(lane);
+    if (lane < COLS - 1) reachable.add(lane + 1);
+  }
+
   // Place first obstacle based on current difficulty
   if (Math.random() < currentObstacleFreq()) {
     const lane = Math.floor(Math.random() * COLS);
     cells[lane] = types[Math.floor(Math.random() * types.length)];
 
-    // Potentially place a second obstacle (always keep at least 1 lane safe)
+    // Potentially place a second obstacle, but ensure at least one
+    // reachable lane stays free so the boat always has a valid path
     if (Math.random() < currentDoubleChance()) {
       const free = [];
       for (let c = 0; c < COLS; c++) { if (!cells[c]) free.push(c); }
-      // Only add 2nd obstacle if 2+ lanes are still free (keep 1 safe)
-      if (free.length >= 2) {
-        const pick = free[Math.floor(Math.random() * free.length)];
+      // Filter candidates: blocking this lane must still leave a
+      // reachable free lane
+      const candidates = free.filter(c => {
+        // If we block lane c, check remaining free lanes are reachable
+        for (const f of free) {
+          if (f !== c && reachable.has(f)) return true;
+        }
+        return false;
+      });
+      if (candidates.length > 0) {
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
         cells[pick] = types[Math.floor(Math.random() * types.length)];
+      }
+    }
+
+    // Safety net: if the first obstacle itself blocks all reachable lanes,
+    // remove it (can happen when reachable set is small)
+    const openAfter = [];
+    for (let c = 0; c < COLS; c++) {
+      if (!cells[c] && reachable.has(c)) openAfter.push(c);
+    }
+    if (openAfter.length === 0) {
+      cells[Math.floor(Math.random() * COLS)] = null; // clear an obstacle
+      // Pick a reachable lane to guarantee safe
+      for (let c = 0; c < COLS; c++) {
+        if (reachable.has(c)) { cells[c] = null; break; }
       }
     }
   }
@@ -284,10 +316,18 @@ function makeObstacleRow() {
     cells[pick] = 'stone';
   }
 
-  // Update lastOpenLanes to all safe lanes (always ≥ 1)
+  // Update lastOpenLanes: lanes free of lethal obstacles AND reachable
   state.lastOpenLanes = [];
   for (let c = 0; c < COLS; c++) {
-    if (!(cells[c] && cells[c] !== 'stone')) state.lastOpenLanes.push(c);
+    if (!(cells[c] && cells[c] !== 'stone') && reachable.has(c)) {
+      state.lastOpenLanes.push(c);
+    }
+  }
+  // Fallback: if somehow empty, treat all non-obstacle lanes as open
+  if (state.lastOpenLanes.length === 0) {
+    for (let c = 0; c < COLS; c++) {
+      if (!(cells[c] && cells[c] !== 'stone')) state.lastOpenLanes.push(c);
+    }
   }
 
   return cells;
@@ -307,6 +347,8 @@ function spawnRow() {
   if (state.distance >= state.nextDeliveryAt) {
     cells = makeDeliveryRow();
     state.nextDeliveryAt = state.distance + DELIVERY_INTERVAL;
+    // Delivery rows are fully passable — reset reachability to all lanes
+    state.lastOpenLanes = [0, 1, 2];
   } else {
     cells = makeObstacleRow();
   }
