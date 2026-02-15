@@ -753,6 +753,7 @@ function checkCollisions() {
       state.stones += 2;
       row.cells[state.boatLane] = null;
       spawnCollectParticles();
+      playPickupSound();
     }
 
     if (cell === 'delivery' && state.stones > 0) {
@@ -1123,6 +1124,32 @@ function drawCelebPyramid(w, h) {
   celebCtx.beginPath();
   celebCtx.arc(cx, topY, 6 + shimmer * 5, 0, Math.PI * 2);
   celebCtx.fill();
+}
+
+function playPickupSound() {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const master = ac.createGain();
+    master.gain.value = 0.18;
+    master.connect(ac.destination);
+    const t = ac.currentTime;
+
+    // Bright two-note chime
+    const freqs = [784, 1047]; // G5 → C6
+    freqs.forEach((freq, i) => {
+      const osc = ac.createOscillator();
+      const g = ac.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0, t + i * 0.08);
+      g.gain.linearRampToValueAtTime(0.3, t + i * 0.08 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.25);
+      osc.connect(g);
+      g.connect(master);
+      osc.start(t + i * 0.08);
+      osc.stop(t + i * 0.08 + 0.3);
+    });
+  } catch (e) { /* Web Audio unavailable */ }
 }
 
 function playVictoryJingle() {
