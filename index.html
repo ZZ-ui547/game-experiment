@@ -126,8 +126,9 @@
     <p id="overlay-text">
       Sail your boat down the Nile and deliver stones to build the Great Pyramid!<br><br>
       Avoid rocks, hippos and crocodiles.<br>
+      Jump over obstacles to clear them!<br>
       Collect bonus stones along the way.<br><br>
-      Tap a lane or swipe to steer.
+      Tap a lane or swipe to steer. Swipe up to jump.
     </p>
     <button id="overlay-btn">Set Sail!</button>
   </div>
@@ -156,6 +157,8 @@ const DIFF_RAMP_DIST     = 4000;   // distance over which difficulty fully ramps
 const BASE_SPEED_MULT    = 1.0;
 const MAX_SPEED_MULT     = 2.0;
 const SPEED_RAMP_DIST    = 4000;
+const JUMP_DURATION      = 22;    // frames airborne
+const JUMP_COOLDOWN      = 50;    // frames before next jump
 
 // ─── Responsive Canvas Setup ─────────────────────────────────
 const canvas    = document.getElementById('game');
@@ -187,8 +190,8 @@ function resizeCanvas() {
 const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 document.getElementById('controls-hint').textContent =
   isTouchDevice
-    ? 'Tap a lane to steer \u2022 Swipe up to boost'
-    : 'Arrow keys / A-D to steer \u2022 Space to boost';
+    ? 'Tap a lane to steer \u2022 Swipe up to jump'
+    : 'Arrow keys / A-D to steer \u2022 Space to jump';
 
 // ─── Difficulty helpers ───────────────────────────────────────
 function currentSpeedMult() {
@@ -240,6 +243,8 @@ function resetGame() {
     frameCount: 0,
     touchLane: null,
     lastOpenLanes: [0, 1, 2],
+    jumpTimer: 0,
+    jumpCooldown: 0,
   };
   // Pre-fill rows with empty water
   for (let i = 0; i < ROWS + 4; i++) {
@@ -562,9 +567,25 @@ function drawBoat() {
   if (state.invincibleTimer > 0 && Math.floor(state.flash) % 2 === 0) return;
 
   const bx = state.boatLane * CELL + CELL / 2;
-  const by = state.boatScreenY;
+  const baseY = state.boatScreenY;
   const pxScale = Math.floor(CELL / 12);
 
+  // Jump lift: sine arc for smooth rise & fall
+  let liftY = 0;
+  if (state.jumpTimer > 0) {
+    const jumpProgress = 1 - state.jumpTimer / JUMP_DURATION;
+    liftY = Math.sin(jumpProgress * Math.PI) * CELL * 0.6;
+
+    // Shadow on the water
+    const shadowAlpha = 0.15 + 0.1 * (1 - jumpProgress);
+    ctx.fillStyle = `rgba(0, 0, 0, ${shadowAlpha})`;
+    const shadowW = CELL * 0.5 * (1 - liftY / (CELL * 0.6) * 0.3);
+    ctx.beginPath();
+    ctx.ellipse(bx, baseY + pxScale * 4, shadowW, pxScale * 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const by = baseY - liftY;
   drawSprite(BOAT_SPRITE, bx, by, pxScale);
 
   // Show cargo count
@@ -572,6 +593,34 @@ function drawBoat() {
   ctx.fillStyle = C.stone;
   for (let i = 0; i < shown; i++) {
     ctx.fillRect(bx - 8 * pxScale / 2 + i * pxScale * 2, by + 2 * pxScale, pxScale, pxScale);
+  }
+}
+
+function drawJumpIndicator() {
+  const bx = state.boatLane * CELL + CELL / 2;
+  const by = state.boatScreenY + CELL * 0.55;
+  const barW = CELL * 0.5;
+  const barH = 4;
+
+  if (state.jumpTimer > 0) {
+    // Airborne — show remaining jump time
+    const t = state.jumpTimer / JUMP_DURATION;
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(bx - barW / 2, by, barW, barH);
+    ctx.fillStyle = '#ffee66';
+    ctx.fillRect(bx - barW / 2, by, barW * t, barH);
+  } else if (state.jumpCooldown > 0) {
+    // Cooldown — show recharge
+    const t = 1 - state.jumpCooldown / JUMP_COOLDOWN;
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(bx - barW / 2, by, barW, barH);
+    ctx.fillStyle = '#666';
+    ctx.fillRect(bx - barW / 2, by, barW * t, barH);
+  } else {
+    // Ready — subtle glow
+    const pulse = 0.4 + 0.3 * Math.sin(state.frameCount * 0.1);
+    ctx.fillStyle = `rgba(255, 238, 102, ${pulse})`;
+    ctx.fillRect(bx - barW / 2, by, barW, barH);
   }
 }
 
@@ -673,6 +722,7 @@ function checkCollisions() {
     if (!cell) continue;
 
     if (cell === 'rock' || cell === 'hippo' || cell === 'croc') {
+      if (state.jumpTimer > 0) return; // airborne — sail over obstacles
       if (state.invincibleTimer <= 0) {
         state.lives--;
         state.invincibleTimer = 90;
@@ -761,13 +811,23 @@ function spawnDeliveryParticles() {
 // ─── Input: Keyboard ──────────────────────────────────────────
 
 const keys = {};
+let jumpQueued = false;
 document.addEventListener('keydown', e => {
+  if ((e.key === ' ' || e.key === 'ArrowUp') && !keys[e.key]) {
+    jumpQueued = true;
+  }
   keys[e.key] = true;
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
     e.preventDefault();
   }
 });
 document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+function tryJump() {
+  if (!state.running) return;
+  if (state.jumpTimer > 0 || state.jumpCooldown > 0) return;
+  state.jumpTimer = JUMP_DURATION;
+}
 
 let moveCD = 0;
 function handleKeyboard() {
@@ -776,7 +836,8 @@ function handleKeyboard() {
     if (keys['ArrowLeft']  || keys['a'] || keys['A']) { moveBoat(-1); moveCD = 8; }
     if (keys['ArrowRight'] || keys['d'] || keys['D']) { moveBoat(1);  moveCD = 8; }
   }
-  state.speed = (keys[' '] || keys['ArrowUp'])
+  if (jumpQueued) { jumpQueued = false; tryJump(); }
+  state.speed = state.jumpTimer > 0
     ? SCROLL_SPEED * currentSpeedMult() * BOOST_MULT
     : SCROLL_SPEED * currentSpeedMult();
 }
@@ -816,14 +877,16 @@ canvas.addEventListener('touchstart', e => {
   state.touchLane = Math.max(0, Math.min(COLS - 1, Math.floor(pos.x / CELL)));
 }, { passive: false });
 
+let touchJumpTriggered = false;
 canvas.addEventListener('touchmove', e => {
   e.preventDefault();
   if (!touchActive || !state || !state.running) return;
   const pos = canvasTouchPos(e);
   const dy = touchStartY - pos.y;
-  state.speed = dy > SWIPE_THRESHOLD
-    ? SCROLL_SPEED * currentSpeedMult() * BOOST_MULT
-    : SCROLL_SPEED * currentSpeedMult();
+  if (dy > SWIPE_THRESHOLD && !touchJumpTriggered) {
+    touchJumpTriggered = true;
+    tryJump();
+  }
   state.touchLane = Math.max(0, Math.min(COLS - 1, Math.floor(pos.x / CELL)));
 }, { passive: false });
 
@@ -831,7 +894,7 @@ canvas.addEventListener('touchend', e => {
   e.preventDefault();
   if (!touchActive || !state || !state.running) return;
   touchActive = false;
-  state.speed = SCROLL_SPEED * currentSpeedMult();
+  touchJumpTriggered = false;
   state.touchLane = null;
 
   const pos = canvasTouchPos(e);
@@ -851,8 +914,8 @@ canvas.addEventListener('touchend', e => {
 
 canvas.addEventListener('touchcancel', () => {
   touchActive = false;
+  touchJumpTriggered = false;
   if (state) {
-    state.speed = SCROLL_SPEED * currentSpeedMult();
     state.touchLane = null;
   }
 });
@@ -922,6 +985,14 @@ function update() {
     state.flash += 0.3;
   }
 
+  // Jump timers
+  if (state.jumpTimer > 0) {
+    state.jumpTimer--;
+    if (state.jumpTimer === 0) state.jumpCooldown = JUMP_COOLDOWN;
+  } else if (state.jumpCooldown > 0) {
+    state.jumpCooldown--;
+  }
+
   checkCollisions();
   updateHUD();
 }
@@ -931,6 +1002,7 @@ function draw() {
   drawLaneHighlight();
   drawRows();
   drawBoat();
+  drawJumpIndicator();
   drawParticles();
   drawPyramidProgress();
   drawSpeedBar();
