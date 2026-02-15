@@ -165,8 +165,8 @@ const DIFF_RAMP_DIST     = 4000;   // distance over which difficulty fully ramps
 const BASE_SPEED_MULT    = 1.0;
 const MAX_SPEED_MULT     = 2.0;
 const SPEED_RAMP_DIST    = 4000;
-const JUMP_DURATION      = 22;    // frames airborne
-const JUMP_COOLDOWN      = 50;    // frames before next jump
+const JUMP_DURATION      = 32;    // frames airborne
+const JUMP_COOLDOWN      = 40;    // frames before next jump
 
 // ─── Responsive Canvas Setup ─────────────────────────────────
 const canvas    = document.getElementById('game');
@@ -582,12 +582,12 @@ function drawBoat() {
   let liftY = 0;
   if (state.jumpTimer > 0) {
     const jumpProgress = 1 - state.jumpTimer / JUMP_DURATION;
-    liftY = Math.sin(jumpProgress * Math.PI) * CELL * 0.6;
+    liftY = Math.sin(jumpProgress * Math.PI) * CELL * 0.8;
 
     // Shadow on the water
     const shadowAlpha = 0.15 + 0.1 * (1 - jumpProgress);
     ctx.fillStyle = `rgba(0, 0, 0, ${shadowAlpha})`;
-    const shadowW = CELL * 0.5 * (1 - liftY / (CELL * 0.6) * 0.3);
+    const shadowW = CELL * 0.5 * (1 - liftY / (CELL * 0.8) * 0.3);
     ctx.beginPath();
     ctx.ellipse(bx, baseY + pxScale * 4, shadowW, pxScale * 2, 0, 0, Math.PI * 2);
     ctx.fill();
