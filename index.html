@@ -110,6 +110,7 @@
 <body>
 
 <div id="hud">
+  <span>Lives: <b id="hud-lives">5</b></span>
   <span>Stones: <b id="hud-stones">10</b></span>
   <span>Pyramid: <b id="hud-pyramid">0</b>/30</span>
   <span>Distance: <b id="hud-dist">0</b>m</span>
@@ -139,6 +140,7 @@ const COLS          = 3;
 const SCROLL_SPEED  = 1.2;
 const BOOST_MULT    = 2.5;
 const STONES_START  = 10;
+const LIVES_START   = 5;
 const PYRAMID_GOAL  = 30;
 const DELIVERY_INTERVAL = 500;
 
@@ -200,6 +202,7 @@ function resetGame() {
     boatLane: 1,
     boatScreenY: CANVAS_H - CELL * 2,
     stones: STONES_START,
+    lives: LIVES_START,
     pyramidStones: 0,
     distance: 0,
     distAccum: 0,
@@ -593,16 +596,16 @@ function checkCollisions() {
 
     if (cell === 'rock' || cell === 'hippo' || cell === 'croc') {
       if (state.invincibleTimer <= 0) {
-        state.stones -= 2;
+        state.lives--;
         state.invincibleTimer = 90;
         spawnHitParticles();
         row.cells[state.boatLane] = null;
-        if (state.stones <= 0) {
-          state.stones = 0;
+        if (state.lives <= 0) {
+          state.lives = 0;
           state.gameOver = true;
           state.running = false;
           showOverlay('Shipwreck!',
-            'You lost all your stones in the Nile.\nDistance: ' + state.distance + 'm\nPyramid: ' + state.pyramidStones + '/' + PYRAMID_GOAL,
+            'Your boat sank in the Nile!\nDistance: ' + state.distance + 'm\nPyramid: ' + state.pyramidStones + '/' + PYRAMID_GOAL,
             'Try Again');
         }
       }
@@ -802,6 +805,7 @@ overlayBtn.addEventListener('click', () => {
 // ─── HUD ──────────────────────────────────────────────────────
 
 function updateHUD() {
+  document.getElementById('hud-lives').textContent   = state.lives;
   document.getElementById('hud-stones').textContent  = state.stones;
   document.getElementById('hud-pyramid').textContent = state.pyramidStones;
   document.getElementById('hud-dist').textContent    = state.distance;
