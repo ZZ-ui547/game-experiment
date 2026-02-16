@@ -120,7 +120,7 @@
   <span>Score: <b id="hud-score">0</b></span>
   <span>Lives: <b id="hud-lives">5</b></span>
   <span>Stones: <b id="hud-stones">10</b></span>
-  <span>Delivered: <b id="hud-pyramid">0</b></span>
+  <span>Rank: <b id="hud-pyramid">Mud Brick</b></span>
   <span>Distance: <b id="hud-dist">0</b>m</span>
   <span>Speed: <b id="hud-speed">1</b></span>
   <span>Danger: <b id="hud-danger">1</b></span>
@@ -276,6 +276,58 @@ function computeScore() {
   return Math.floor(state.distance * (1 + state.totalStonesCollected * 0.1));
 }
 
+// ─── Milestones ──────────────────────────────────────────────
+const MILESTONES = [
+  { score: 0,       name: 'Mud Brick',       color: '#8B6914' },
+  { score: 500,     name: 'Mastaba',          color: '#a07020' },
+  { score: 2000,    name: 'Step Pyramid',     color: '#b8860b' },
+  { score: 8000,    name: 'Bent Pyramid',     color: '#c4943a' },
+  { score: 20000,   name: 'Red Pyramid',      color: '#cd5c5c' },
+  { score: 50000,   name: 'Great Pyramid',    color: '#daa520' },
+  { score: 100000,  name: 'Pyramid Complex',  color: '#e0b050' },
+  { score: 250000,  name: 'Valley of Kings',  color: '#dda0dd' },
+  { score: 500000,  name: 'Living God',       color: '#ffd700' },
+];
+
+function getCurrentMilestone() {
+  const score = state.score || computeScore();
+  let ms = MILESTONES[0];
+  for (let i = MILESTONES.length - 1; i >= 0; i--) {
+    if (score >= MILESTONES[i].score) { ms = MILESTONES[i]; break; }
+  }
+  return ms;
+}
+
+function getNextMilestone() {
+  const score = state.score || computeScore();
+  for (const ms of MILESTONES) {
+    if (score < ms.score) return ms;
+  }
+  return null;
+}
+
+function playMilestoneSound() {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const master = ac.createGain();
+    master.gain.value = 0.2;
+    master.connect(ac.destination);
+    const t = ac.currentTime;
+    [523, 659, 784, 1047].forEach((freq, i) => {
+      const osc = ac.createOscillator();
+      const g = ac.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0, t + i * 0.1);
+      g.gain.linearRampToValueAtTime(0.25, t + i * 0.1 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.1 + 0.35);
+      osc.connect(g); g.connect(master);
+      osc.start(t + i * 0.1);
+      osc.stop(t + i * 0.1 + 0.4);
+    });
+  } catch (e) { /* Web Audio unavailable */ }
+}
+
 // ─── State ────────────────────────────────────────────────────
 let state;
 
@@ -292,6 +344,9 @@ function resetGame() {
     pyramidStones: 0,
     totalStonesCollected: 0,
     score: 0,
+    milestoneIndex: 0,
+    milestoneFlash: 0,
+    milestoneText: '',
     distance: 0,
     distAccum: 0,
     nextDeliveryAt: DELIVERY_INTERVAL,
@@ -812,11 +867,12 @@ function checkCollisions() {
           state.gameOver = true;
           state.running = false;
           state.score = computeScore();
+          const finalMs = getCurrentMilestone();
           showOverlay('Shipwreck!',
             'Your boat sank in the Nile!\n\nScore: ' + state.score.toLocaleString() +
+            '\nRank: ' + finalMs.name +
             '\nDistance: ' + state.distance + 'm' +
-            '\nStones collected: ' + state.totalStonesCollected +
-            '\nStones delivered: ' + state.pyramidStones,
+            '\nStones collected: ' + state.totalStonesCollected,
             'Try Again');
         }
       }
@@ -1261,10 +1317,11 @@ function playVictoryJingle() {
 
 function updateHUD() {
   state.score = computeScore();
+  const ms = getCurrentMilestone();
   document.getElementById('hud-score').textContent   = state.score.toLocaleString();
   document.getElementById('hud-lives').textContent   = state.lives;
   document.getElementById('hud-stones').textContent  = state.stones;
-  document.getElementById('hud-pyramid').textContent = state.pyramidStones;
+  document.getElementById('hud-pyramid').textContent = ms.name;
   document.getElementById('hud-dist').textContent    = state.distance;
   document.getElementById('hud-speed').textContent   = currentSpeedMult().toFixed(1) + 'x';
   const dangerLvl = Math.floor(1 + difficultyT() * 9);
@@ -1317,7 +1374,60 @@ function update() {
   } else if (state.jumpCooldown > 0) {
     state.jumpCooldown--;
   }
+  // Milestone check
+  checkMilestone();
+  if (state.milestoneFlash > 0) state.milestoneFlash--;
+
   updateHUD();
+}
+
+function checkMilestone() {
+  const score = computeScore();
+  for (let i = MILESTONES.length - 1; i >= 0; i--) {
+    if (score >= MILESTONES[i].score && i > state.milestoneIndex) {
+      state.milestoneIndex = i;
+      state.milestoneFlash = 180;  // ~3 seconds at 60fps
+      state.milestoneText = MILESTONES[i].name;
+      playMilestoneSound();
+      // Spawn celebration particles
+      for (let p = 0; p < 30; p++) {
+        state.particles.push({
+          x: CANVAS_W / 2 + (Math.random() - 0.5) * CANVAS_W * 0.6,
+          y: CANVAS_H * 0.3,
+          vx: (Math.random() - 0.5) * 4,
+          vy: -Math.random() * 3 - 1,
+          size: 3 + Math.random() * 4,
+          life: 1,
+          color: MILESTONES[i].color,
+        });
+      }
+      break;
+    }
+  }
+}
+
+function drawMilestoneFlash() {
+  if (state.milestoneFlash <= 0) return;
+  const alpha = Math.min(1, state.milestoneFlash / 30);  // fade out last 0.5s
+  const ms = MILESTONES[state.milestoneIndex];
+
+  // Background banner
+  ctx.fillStyle = `rgba(0, 0, 0, ${0.5 * alpha})`;
+  ctx.fillRect(0, CANVAS_H * 0.25, CANVAS_W, CANVAS_H * 0.15);
+
+  // Milestone name
+  ctx.fillStyle = ms.color;
+  ctx.globalAlpha = alpha;
+  ctx.font = 'bold ' + Math.floor(CELL * 0.35) + 'px Georgia';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(ms.name, CANVAS_W / 2, CANVAS_H * 0.30);
+
+  // Sub-label
+  ctx.font = Math.floor(CELL * 0.15) + 'px Georgia';
+  ctx.fillStyle = '#e8d5a3';
+  ctx.fillText('MILESTONE REACHED', CANVAS_W / 2, CANVAS_H * 0.36);
+  ctx.globalAlpha = 1;
 }
 
 function draw() {
@@ -1327,6 +1437,7 @@ function draw() {
   drawBoat();
   drawJumpIndicator();
   drawParticles();
+  drawMilestoneFlash();
   drawPyramidProgress();
   drawSpeedBar();
 }
