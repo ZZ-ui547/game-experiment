@@ -93,6 +93,42 @@
     -webkit-tap-highlight-color: transparent;
   }
   #overlay button:hover { background: #e0b050; }
+  #overlay button.secondary {
+    background: transparent;
+    border: 1px solid #c4943a;
+    color: #c4943a;
+    padding: 8px 20px;
+    font-size: 0.85rem;
+    margin-top: 8px;
+  }
+  #overlay button.secondary:hover { background: rgba(196,148,58,0.15); }
+
+  #name-input {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid #c4943a;
+    color: #e8d5a3;
+    font-family: 'Georgia', serif;
+    font-size: 1rem;
+    padding: 8px 12px;
+    border-radius: 4px;
+    text-align: center;
+    width: 200px;
+    margin-bottom: 12px;
+    outline: none;
+  }
+  #name-input:focus { border-color: #e0b050; }
+
+  #leaderboard {
+    font-size: 0.75rem;
+    margin: 8px 0;
+    max-width: 300px;
+    width: 100%;
+  }
+  #leaderboard table { width: 100%; border-collapse: collapse; }
+  #leaderboard th { color: #c4943a; text-align: left; padding: 2px 6px; font-size: 0.7rem; }
+  #leaderboard td { padding: 2px 6px; font-size: 0.72rem; }
+  #leaderboard tr.highlight td { color: #ffd700; font-weight: bold; }
+  #leaderboard tr:nth-child(even) td { background: rgba(255,255,255,0.03); }
 
   #controls-hint {
     position: absolute;
@@ -138,7 +174,10 @@
       Score = Distance x Stones collected.<br><br>
       Tap a lane or swipe to steer. Swipe up to jump.
     </p>
+    <input id="name-input" type="text" placeholder="Your name" maxlength="12">
+    <div id="leaderboard"></div>
     <button id="overlay-btn">Set Sail!</button>
+    <button id="share-btn" class="secondary" style="display:none">Share Score</button>
   </div>
 
   <canvas id="celebration" class="hidden"></canvas>
@@ -1100,12 +1139,14 @@ function checkCollisions() {
           state.gameOver = true;
           state.running = false;
           state.score = computeScore();
+          isGameOver = true;
+          lastGameScore = state.score;
           const finalMs = getCurrentMilestone();
           showOverlay('Shipwreck!',
-            'Your boat sank in the Nile!\n\nScore: ' + state.score.toLocaleString() +
+            'Score: ' + state.score.toLocaleString() +
             '\nRank: ' + finalMs.name +
             '\nDistance: ' + state.distance + 'm' +
-            '\nStones collected: ' + state.totalStonesCollected,
+            '\nStones: ' + state.totalStonesCollected,
             'Try Again');
         }
       }
@@ -1317,23 +1358,112 @@ canvas.addEventListener('touchcancel', () => {
 
 document.addEventListener('touchmove', e => { e.preventDefault(); }, { passive: false });
 
+// ─── Leaderboard (localStorage) ──────────────────────────────
+
+const LB_KEY = 'nile_leaderboard';
+const LB_NAME_KEY = 'nile_player_name';
+
+function getLeaderboard() {
+  try { return JSON.parse(localStorage.getItem(LB_KEY)) || []; }
+  catch { return []; }
+}
+
+function saveLeaderboard(lb) {
+  try { localStorage.setItem(LB_KEY, JSON.stringify(lb)); } catch {}
+}
+
+function addToLeaderboard(name, score, milestone, distance, stones) {
+  const lb = getLeaderboard();
+  const entry = { name, score, milestone, distance, stones, date: new Date().toLocaleDateString() };
+  lb.push(entry);
+  lb.sort((a, b) => b.score - a.score);
+  const trimmed = lb.slice(0, 10);
+  saveLeaderboard(trimmed);
+  return trimmed.findIndex(e => e === entry);
+}
+
+function renderLeaderboard(highlightScore) {
+  const lb = getLeaderboard();
+  const lbDiv = document.getElementById('leaderboard');
+  if (lb.length === 0) {
+    lbDiv.innerHTML = '<p style="text-align:center;opacity:0.5;font-size:0.75rem">No scores yet</p>';
+    return;
+  }
+  let html = '<table><tr><th>#</th><th>Name</th><th>Score</th><th>Rank</th></tr>';
+  lb.forEach((e, i) => {
+    const hl = (highlightScore != null && e.score === highlightScore) ? ' class="highlight"' : '';
+    html += `<tr${hl}><td>${i + 1}</td><td>${e.name}</td><td>${e.score.toLocaleString()}</td><td>${e.milestone}</td></tr>`;
+  });
+  html += '</table>';
+  lbDiv.innerHTML = html;
+}
+
+function getPlayerName() {
+  try { return localStorage.getItem(LB_NAME_KEY) || ''; } catch { return ''; }
+}
+
+function savePlayerName(name) {
+  try { localStorage.setItem(LB_NAME_KEY, name); } catch {}
+}
+
 // ─── Overlay ──────────────────────────────────────────────────
 
 const overlay    = document.getElementById('overlay');
 const overlayT   = document.getElementById('overlay-title');
 const overlayP   = document.getElementById('overlay-text');
 const overlayBtn = document.getElementById('overlay-btn');
+const nameInput  = document.getElementById('name-input');
+const shareBtn   = document.getElementById('share-btn');
+
+nameInput.value = getPlayerName();
+
+let lastGameScore = null;
+let isGameOver = false;
 
 function showOverlay(title, text, btn) {
   overlayT.textContent = title;
   overlayP.textContent = text;
   overlayBtn.textContent = btn;
   overlay.classList.remove('hidden');
+
+  if (isGameOver && lastGameScore != null) {
+    // Save to leaderboard
+    const name = nameInput.value.trim() || 'Anonymous';
+    savePlayerName(name);
+    const ms = getCurrentMilestone();
+    const rank = addToLeaderboard(name, lastGameScore, ms.name, state.distance, state.totalStonesCollected);
+    renderLeaderboard(lastGameScore);
+
+    // Check if personal best
+    const lb = getLeaderboard();
+    if (lb.length > 0 && lb[0].score === lastGameScore) {
+      overlayP.textContent = 'NEW PERSONAL BEST!\n\n' + text;
+    }
+
+    shareBtn.style.display = 'block';
+    shareBtn.onclick = () => {
+      const shareText = 'Stones of the Nile: I reached ' + ms.name + ' with ' + lastGameScore.toLocaleString() + ' points! Can you beat me?';
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(shareText).then(() => {
+          shareBtn.textContent = 'Copied!';
+          setTimeout(() => { shareBtn.textContent = 'Share Score'; }, 2000);
+        });
+      }
+    };
+
+    lastGameScore = null;
+  } else {
+    shareBtn.style.display = 'none';
+    renderLeaderboard();
+  }
 }
 
 overlayBtn.addEventListener('click', () => {
+  const name = nameInput.value.trim();
+  if (name) savePlayerName(name);
   overlay.classList.add('hidden');
   stopCelebration();
+  isGameOver = false;
   resizeCanvas();
   resetGame();
   state.running = true;
