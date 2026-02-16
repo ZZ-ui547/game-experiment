@@ -154,19 +154,23 @@ const STONES_START  = 10;
 const LIVES_START   = 5;
 const DELIVERY_INTERVAL = 500;
 
-// Difficulty scaling (ramps with distance)
-const BASE_OBSTACLE_FREQ = 0.45;   // starting obstacle-per-row chance
-const MAX_OBSTACLE_FREQ  = 0.68;   // max obstacle-per-row chance
-const BASE_BONUS_FREQ    = 0.12;   // starting bonus chance
-const MAX_BONUS_FREQ     = 0.35;   // max bonus chance (compensates harder obstacles)
-const DOUBLE_OBS_START   = 400;    // distance where 2-obstacle rows can begin
-const MAX_DOUBLE_CHANCE  = 0.35;   // max chance of a 2nd obstacle in one row
-const DIFF_RAMP_DIST     = 4000;   // distance over which difficulty fully ramps
+// Wave-based difficulty
+const WAVE_LENGTH        = 350;     // distance per full wave cycle
+const BUILDUP_FRAC       = 0.40;    // first 40% of wave
+const PEAK_FRAC          = 0.30;    // next 30% of wave
+// remaining 30% is relief
+
+const BASE_OBSTACLE_FREQ = 0.35;    // starting obstacle-per-row chance
+const MAX_OBSTACLE_FREQ  = 0.78;    // max obstacle-per-row chance at high waves
+const BASE_BONUS_FREQ    = 0.12;    // starting bonus chance
+const MAX_BONUS_FREQ     = 0.38;    // max bonus chance
+const MAX_DOUBLE_CHANCE  = 0.45;    // max chance of 2nd obstacle in one row
+
 const BASE_SPEED_MULT    = 1.5;
-const MAX_SPEED_MULT     = 2.5;
-const SPEED_RAMP_DIST    = 4000;
-const JUMP_DURATION      = 32;    // frames airborne
-const JUMP_COOLDOWN      = 40;    // frames before next jump
+const MAX_SPEED_MULT     = 3.2;     // higher ceiling for infinite play
+
+const JUMP_DURATION      = 32;      // frames airborne
+const JUMP_COOLDOWN      = 40;      // frames before next jump
 
 // ─── Responsive Canvas Setup ─────────────────────────────────
 const canvas    = document.getElementById('game');
@@ -201,30 +205,70 @@ document.getElementById('controls-hint').textContent =
     ? 'Tap a lane to steer \u2022 Swipe up to jump'
     : 'Arrow keys / A-D to steer \u2022 Space to jump';
 
-// ─── Difficulty helpers ───────────────────────────────────────
+// ─── Wave-based Difficulty ────────────────────────────────────
+
+// Returns { waveNum, phase, phaseT, baseline }
+function getWaveInfo() {
+  const d = state.distance;
+  const waveNum = Math.floor(d / WAVE_LENGTH);
+  const inWave = (d % WAVE_LENGTH) / WAVE_LENGTH;  // 0..1 position within wave
+
+  let phase, phaseT;
+  if (inWave < BUILDUP_FRAC) {
+    phase = 'buildup';
+    phaseT = inWave / BUILDUP_FRAC;  // 0→1 during buildup
+  } else if (inWave < BUILDUP_FRAC + PEAK_FRAC) {
+    phase = 'peak';
+    phaseT = (inWave - BUILDUP_FRAC) / PEAK_FRAC;
+  } else {
+    phase = 'relief';
+    phaseT = (inWave - BUILDUP_FRAC - PEAK_FRAC) / (1 - BUILDUP_FRAC - PEAK_FRAC);
+  }
+
+  // Baseline grows with wave number (asymptotic, never reaches 1)
+  const baseline = 1 - 1 / (1 + waveNum * 0.12);
+  return { waveNum, phase, phaseT, baseline };
+}
+
+// Wave intensity: 0..1 value combining baseline + phase modulation
+function waveIntensity() {
+  const w = getWaveInfo();
+  let phaseModifier;
+  if (w.phase === 'buildup') {
+    phaseModifier = 0.3 + 0.5 * w.phaseT;  // ramp from 0.3 → 0.8
+  } else if (w.phase === 'peak') {
+    phaseModifier = 0.8 + 0.2 * Math.sin(w.phaseT * Math.PI);  // 0.8 → 1.0 → 0.8
+  } else {
+    phaseModifier = 0.3 - 0.15 * w.phaseT;  // drop to 0.15
+  }
+  // Combine: baseline raises the floor, phaseModifier modulates within wave
+  return Math.min(1, w.baseline * 0.6 + phaseModifier * 0.4 + w.baseline * phaseModifier * 0.3);
+}
+
 function currentSpeedMult() {
-  const t = Math.min(1, state.distance / SPEED_RAMP_DIST);
-  return BASE_SPEED_MULT + (MAX_SPEED_MULT - BASE_SPEED_MULT) * t;
+  const intensity = waveIntensity();
+  return BASE_SPEED_MULT + (MAX_SPEED_MULT - BASE_SPEED_MULT) * intensity;
 }
 
 function difficultyT() {
-  const t = Math.min(1, state.distance / DIFF_RAMP_DIST);
-  return 1 - (1 - t) * (1 - t);  // ease-out: ramps faster early, flattens late
+  return waveIntensity();
 }
 
 function currentObstacleFreq() {
-  return BASE_OBSTACLE_FREQ + (MAX_OBSTACLE_FREQ - BASE_OBSTACLE_FREQ) * difficultyT();
+  return BASE_OBSTACLE_FREQ + (MAX_OBSTACLE_FREQ - BASE_OBSTACLE_FREQ) * waveIntensity();
 }
 
 function currentBonusFreq() {
-  return BASE_BONUS_FREQ + (MAX_BONUS_FREQ - BASE_BONUS_FREQ) * difficultyT();
+  const w = getWaveInfo();
+  // More bonuses during relief phases to reward survival
+  const reliefBoost = w.phase === 'relief' ? 0.12 : 0;
+  return BASE_BONUS_FREQ + (MAX_BONUS_FREQ - BASE_BONUS_FREQ) * waveIntensity() + reliefBoost;
 }
 
 function currentDoubleChance() {
-  if (state.distance < DOUBLE_OBS_START) return 0;
-  const t = Math.min(1, (state.distance - DOUBLE_OBS_START) / (DIFF_RAMP_DIST - DOUBLE_OBS_START));
-  const tEased = 1 - (1 - t) * (1 - t);  // ease-out to match obstacle ramp
-  return MAX_DOUBLE_CHANCE * tEased;
+  const w = getWaveInfo();
+  if (w.waveNum < 1) return 0;  // no double obstacles in first wave
+  return MAX_DOUBLE_CHANCE * waveIntensity();
 }
 
 // ─── Score ────────────────────────────────────────────────────
@@ -712,22 +756,31 @@ function drawSpeedBar() {
   const bx = pad;
   const by = pad;
 
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(bx - 2, by - 2, barW + 4, barH + 12);
+  const w = getWaveInfo();
+  const intensity = waveIntensity();
 
-  ctx.fillStyle = '#aaa';
-  ctx.font = '8px Georgia';
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(bx - 2, by - 2, barW + 4, barH + 22);
+
+  // Wave label
+  ctx.fillStyle = w.phase === 'peak' ? '#ff8844' : w.phase === 'relief' ? '#66cc88' : '#aaa';
+  ctx.font = '7px Georgia';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillText('SPEED', bx, by);
+  const phaseLabel = w.phase === 'peak' ? 'PEAK' : w.phase === 'relief' ? 'CALM' : 'WAVE ' + (w.waveNum + 1);
+  ctx.fillText(phaseLabel, bx, by);
 
-  const t = Math.min(1, state.distance / SPEED_RAMP_DIST);
+  // Intensity bar
   ctx.fillStyle = '#333';
   ctx.fillRect(bx, by + 10, barW, barH);
-  const r = Math.floor(255 * t);
-  const g = Math.floor(180 * (1 - t));
+  const r = Math.floor(255 * intensity);
+  const g = Math.floor(180 * (1 - intensity));
   ctx.fillStyle = `rgb(${r},${g},0)`;
-  ctx.fillRect(bx, by + 10, barW * t, barH);
+  ctx.fillRect(bx, by + 10, barW * intensity, barH);
+
+  // Speed text
+  ctx.fillStyle = '#aaa';
+  ctx.fillText(currentSpeedMult().toFixed(1) + 'x', bx, by + 18);
 }
 
 // ─── Collision ────────────────────────────────────────────────
