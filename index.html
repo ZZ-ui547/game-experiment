@@ -273,7 +273,8 @@ function currentDoubleChance() {
 
 // ─── Score ────────────────────────────────────────────────────
 function computeScore() {
-  return Math.floor(state.distance * (1 + state.totalStonesCollected * 0.1));
+  const base = Math.floor(state.distance * (1 + state.totalStonesCollected * 0.1));
+  return base + state.bonusPoints;
 }
 
 // ─── Milestones ──────────────────────────────────────────────
@@ -359,6 +360,13 @@ function resetGame() {
     lastOpenLanes: [0, 1, 2],
     jumpTimer: 0,
     jumpCooldown: 0,
+    // Risk/reward
+    bonusPoints: 0,          // accumulated bonus points added to score
+    jumpChain: 0,            // consecutive jumped obstacles
+    stoneStreak: 0,          // consecutive stones without missing
+    streakMultTimer: 0,      // frames of 2x multiplier from streak
+    closeCallTimer: 0,       // frames for "CLOSE CALL" display
+    closeCallText: '',
     // Environmental hazards
     hazardActive: null,     // current active hazard type
     hazardTimer: 0,         // frames remaining for current hazard
@@ -1034,6 +1042,28 @@ function checkCollisions() {
   const boatTop = state.boatScreenY - boatH / 2 + pxScale * 2;
   const boatBot = state.boatScreenY + boatH / 2 - pxScale * 2;
 
+  // Close call detection: check adjacent lanes for obstacles passing by
+  for (const row of state.rows) {
+    const rowTop = row.y;
+    const rowBot = row.y + CELL;
+    if (rowBot < boatTop || rowTop > boatBot) continue;
+    if (!row._closeCalled) {
+      for (let c = 0; c < COLS; c++) {
+        if (c === state.boatLane) continue;
+        const adj = row.cells[c];
+        if (adj === 'rock' || adj === 'hippo' || adj === 'croc') {
+          // Only count if this is an adjacent lane
+          if (Math.abs(c - state.boatLane) === 1 && state.jumpTimer === 0) {
+            state.bonusPoints += 50;
+            state.closeCallTimer = 45;
+            state.closeCallText = 'CLOSE CALL +50';
+            row._closeCalled = true;
+          }
+        }
+      }
+    }
+  }
+
   for (const row of state.rows) {
     const rowTop = row.y;
     const rowBot = row.y + CELL;
@@ -1044,9 +1074,24 @@ function checkCollisions() {
 
     if (cell === 'rock' || cell === 'hippo' || cell === 'croc') {
       // Can only jump over hippos and crocs, not rocks
-      if (state.jumpTimer > 0 && cell !== 'rock') return;
+      if (state.jumpTimer > 0 && cell !== 'rock') {
+        // Successful jump over obstacle — track jump chain
+        if (!row._jumpCounted) {
+          row._jumpCounted = true;
+          state.jumpChain++;
+          if (state.jumpChain >= 2) {
+            const chainBonus = state.jumpChain * 100;
+            state.bonusPoints += chainBonus;
+            state.closeCallTimer = 45;
+            state.closeCallText = 'JUMP x' + state.jumpChain + ' +' + chainBonus;
+          }
+        }
+        return;
+      }
       if (state.invincibleTimer <= 0) {
         state.lives--;
+        state.jumpChain = 0;
+        state.stoneStreak = 0;
         state.invincibleTimer = 90;
         spawnHitParticles();
         row.cells[state.boatLane] = null;
@@ -1070,6 +1115,14 @@ function checkCollisions() {
     if (cell === 'stone') {
       state.stones += 2;
       state.totalStonesCollected += 2;
+      state.stoneStreak++;
+      // Stone streak: 5+ triggers 2x multiplier for 5 seconds
+      if (state.stoneStreak >= 5 && state.streakMultTimer <= 0) {
+        state.streakMultTimer = 300;  // ~5 seconds
+        state.bonusPoints += 200;
+        state.closeCallTimer = 60;
+        state.closeCallText = 'STREAK x2!';
+      }
       row.cells[state.boatLane] = null;
       spawnCollectParticles();
       playPickupSound();
@@ -1562,10 +1615,16 @@ function update() {
       // Clear any obstacles still overlapping the boat on landing,
       // since the jump arc doesn't move them fully past the hitbox.
       clearObstaclesUnderBoat();
+      state.jumpChain = 0;  // reset chain on landing
     }
   } else if (state.jumpCooldown > 0) {
     state.jumpCooldown--;
   }
+
+  // Streak multiplier and close call timers
+  if (state.streakMultTimer > 0) state.streakMultTimer--;
+  if (state.closeCallTimer > 0) state.closeCallTimer--;
+
   // Milestone check
   checkMilestone();
   if (state.milestoneFlash > 0) state.milestoneFlash--;
@@ -1595,6 +1654,30 @@ function checkMilestone() {
       }
       break;
     }
+  }
+}
+
+function drawBonusText() {
+  if (state.closeCallTimer <= 0) return;
+  const alpha = Math.min(1, state.closeCallTimer / 15);
+  const bx = state.boatLane * CELL + CELL / 2;
+  const by = state.boatScreenY - CELL * 0.7 - (45 - state.closeCallTimer) * 0.5;
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#ffee44';
+  ctx.font = 'bold ' + Math.floor(CELL * 0.16) + 'px Georgia';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(state.closeCallText, bx, by);
+  ctx.globalAlpha = 1;
+
+  // Streak multiplier indicator
+  if (state.streakMultTimer > 0) {
+    const sa = Math.min(1, state.streakMultTimer / 30);
+    ctx.globalAlpha = sa * 0.7;
+    ctx.fillStyle = '#ffaa22';
+    ctx.font = Math.floor(CELL * 0.12) + 'px Georgia';
+    ctx.fillText('x2 ACTIVE', CANVAS_W / 2, CANVAS_H * 0.15);
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -1630,6 +1713,7 @@ function draw() {
   drawJumpIndicator();
   drawParticles();
   drawHazardEffects();
+  drawBonusText();
   drawMilestoneFlash();
   drawPyramidProgress();
   drawSpeedBar();
