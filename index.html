@@ -117,9 +117,10 @@
 <body>
 
 <div id="hud">
+  <span>Score: <b id="hud-score">0</b></span>
   <span>Lives: <b id="hud-lives">5</b></span>
   <span>Stones: <b id="hud-stones">10</b></span>
-  <span>Pyramid: <b id="hud-pyramid">0</b>/30</span>
+  <span>Delivered: <b id="hud-pyramid">0</b></span>
   <span>Distance: <b id="hud-dist">0</b>m</span>
   <span>Speed: <b id="hud-speed">1</b></span>
   <span>Danger: <b id="hud-danger">1</b></span>
@@ -131,10 +132,10 @@
   <div id="overlay">
     <h2 id="overlay-title">Stones of the Nile</h2>
     <p id="overlay-text">
-      Sail your boat down the Nile and deliver stones to build the Great Pyramid!<br><br>
+      Sail the Nile forever! Collect and deliver stones to build your pyramid.<br><br>
       Avoid rocks, hippos and crocodiles.<br>
       Jump over hippos and crocs (not rocks!).<br>
-      Collect bonus stones along the way.<br><br>
+      Score = Distance x Stones collected.<br><br>
       Tap a lane or swipe to steer. Swipe up to jump.
     </p>
     <button id="overlay-btn">Set Sail!</button>
@@ -151,7 +152,6 @@ const SCROLL_SPEED  = 1.2;
 const BOOST_MULT    = 2.5;
 const STONES_START  = 10;
 const LIVES_START   = 5;
-const PYRAMID_GOAL  = 30;
 const DELIVERY_INTERVAL = 500;
 
 // Difficulty scaling (ramps with distance)
@@ -227,6 +227,11 @@ function currentDoubleChance() {
   return MAX_DOUBLE_CHANCE * tEased;
 }
 
+// ─── Score ────────────────────────────────────────────────────
+function computeScore() {
+  return Math.floor(state.distance * (1 + state.totalStonesCollected * 0.1));
+}
+
 // ─── State ────────────────────────────────────────────────────
 let state;
 
@@ -241,6 +246,8 @@ function resetGame() {
     stones: STONES_START,
     lives: LIVES_START,
     pyramidStones: 0,
+    totalStonesCollected: 0,
+    score: 0,
     distance: 0,
     distAccum: 0,
     nextDeliveryAt: DELIVERY_INTERVAL,
@@ -656,7 +663,10 @@ function drawPyramidProgress() {
   const ph = 44;
   const px = CANVAS_W - pw - pad;
   const py = pad;
-  const progress = state.pyramidStones / PYRAMID_GOAL;
+  // Logarithmic growth so the pyramid always has room to grow
+  const progress = state.pyramidStones > 0
+    ? Math.min(1, Math.log(1 + state.pyramidStones) / Math.log(1 + 200))
+    : 0;
 
   ctx.fillStyle = 'rgba(0,0,0,0.5)';
   ctx.fillRect(px - 4, py - 4, pw + 8, ph + 8);
@@ -673,7 +683,7 @@ function drawPyramidProgress() {
 
   // Filled progress
   if (progress > 0) {
-    const h = (ph - 6) * Math.min(progress, 1);
+    const h = (ph - 6) * progress;
     const topY = py + ph - 2 - h;
     const halfW = (pw / 2 - 4) * (h / (ph - 6));
     ctx.fillStyle = C.gold;
@@ -685,6 +695,13 @@ function drawPyramidProgress() {
     ctx.closePath();
     ctx.fill();
   }
+
+  // Stone count label
+  ctx.fillStyle = C.gold;
+  ctx.font = '7px Georgia';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(state.pyramidStones, px + pw / 2, py + ph + 2);
 }
 
 // ─── Speed indicator ──────────────────────────────────────────
@@ -741,8 +758,12 @@ function checkCollisions() {
           state.lives = 0;
           state.gameOver = true;
           state.running = false;
+          state.score = computeScore();
           showOverlay('Shipwreck!',
-            'Your boat sank in the Nile!\nDistance: ' + state.distance + 'm\nPyramid: ' + state.pyramidStones + '/' + PYRAMID_GOAL,
+            'Your boat sank in the Nile!\n\nScore: ' + state.score.toLocaleString() +
+            '\nDistance: ' + state.distance + 'm' +
+            '\nStones collected: ' + state.totalStonesCollected +
+            '\nStones delivered: ' + state.pyramidStones,
             'Try Again');
         }
       }
@@ -751,6 +772,7 @@ function checkCollisions() {
 
     if (cell === 'stone') {
       state.stones += 2;
+      state.totalStonesCollected += 2;
       row.cells[state.boatLane] = null;
       spawnCollectParticles();
       playPickupSound();
@@ -762,15 +784,6 @@ function checkCollisions() {
       state.pyramidStones += deliver;
       spawnDeliveryParticles();
       for (let c = 0; c < COLS; c++) row.cells[c] = null;
-
-      if (state.pyramidStones >= PYRAMID_GOAL) {
-        state.won = true;
-        state.running = false;
-        showOverlay('Pyramid Complete!',
-          'You delivered ' + PYRAMID_GOAL + ' stones!\nThe Great Pyramid is built!\nDistance: ' + state.distance + 'm',
-          'Play Again');
-        startCelebration();
-      }
     }
   }
 }
@@ -1133,9 +1146,7 @@ function playPickupSound() {
     master.gain.value = 0.18;
     master.connect(ac.destination);
     const t = ac.currentTime;
-
-    // Bright two-note chime
-    const freqs = [784, 1047]; // G5 → C6
+    const freqs = [784, 1047];
     freqs.forEach((freq, i) => {
       const osc = ac.createOscillator();
       const g = ac.createGain();
@@ -1196,6 +1207,8 @@ function playVictoryJingle() {
 // ─── HUD ──────────────────────────────────────────────────────
 
 function updateHUD() {
+  state.score = computeScore();
+  document.getElementById('hud-score').textContent   = state.score.toLocaleString();
   document.getElementById('hud-lives').textContent   = state.lives;
   document.getElementById('hud-stones').textContent  = state.stones;
   document.getElementById('hud-pyramid').textContent = state.pyramidStones;
