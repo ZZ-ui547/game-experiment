@@ -77,6 +77,14 @@
     text-align: center;
     line-height: 1.5;
     max-width: 320px;
+    white-space: pre-line;
+  }
+  #overlay .new-best {
+    color: #ffd700;
+    font-weight: bold;
+    font-size: 1.1rem;
+    text-shadow: 0 0 8px #ffd700;
+    margin-bottom: 4px;
   }
 
   #overlay button {
@@ -1427,22 +1435,29 @@ function showOverlay(title, text, btn) {
   overlay.classList.remove('hidden');
 
   if (isGameOver && lastGameScore != null) {
-    // Save to leaderboard
+    const savedScore = lastGameScore;
     const name = nameInput.value.trim() || 'Anonymous';
     savePlayerName(name);
     const ms = getCurrentMilestone();
-    const rank = addToLeaderboard(name, lastGameScore, ms.name, state.distance, state.totalStonesCollected);
-    renderLeaderboard(lastGameScore);
+    const rank = addToLeaderboard(name, savedScore, ms.name, state.distance, state.totalStonesCollected);
+    renderLeaderboard(savedScore);
 
-    // Check if personal best
+    // Check if personal best (first entry in sorted leaderboard)
     const lb = getLeaderboard();
-    if (lb.length > 0 && lb[0].score === lastGameScore) {
-      overlayP.textContent = 'NEW PERSONAL BEST!\n\n' + text;
+    const isNewBest = lb.length > 0 && lb[0].score === savedScore;
+    if (isNewBest) {
+      overlayT.textContent = 'NEW BEST!';
+      overlayT.style.color = '#ffd700';
+    } else {
+      overlayT.style.color = '';
     }
 
+    // Hide name input on game over (already saved)
+    nameInput.style.display = 'none';
     shareBtn.style.display = 'block';
+    shareBtn.textContent = 'Share Score';
     shareBtn.onclick = () => {
-      const shareText = 'Stones of the Nile: I reached ' + ms.name + ' with ' + lastGameScore.toLocaleString() + ' points! Can you beat me?';
+      const shareText = 'Stones of the Nile: I reached ' + ms.name + ' with ' + savedScore.toLocaleString() + ' points! Can you beat me?';
       if (navigator.clipboard) {
         navigator.clipboard.writeText(shareText).then(() => {
           shareBtn.textContent = 'Copied!';
@@ -1453,7 +1468,10 @@ function showOverlay(title, text, btn) {
 
     lastGameScore = null;
   } else {
+    // Start screen
+    nameInput.style.display = '';
     shareBtn.style.display = 'none';
+    overlayT.style.color = '';
     renderLeaderboard();
   }
 }
