@@ -671,23 +671,23 @@ function drawHazardEffects() {
   if (state.hazardActive === 'sandstorm') {
     // Sand particles overlay
     const intensity = Math.min(1, (HAZARD_DEFS[0].duration - state.hazardTimer) / 60);
-    ctx.fillStyle = `rgba(196, 163, 90, ${0.35 * intensity})`;
+    ctx.fillStyle = `rgba(196, 163, 90, ${0.2 * intensity})`;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    // Moving sand streaks
-    ctx.fillStyle = `rgba(180, 150, 80, ${0.25 * intensity})`;
+    // Moving sand streaks (deterministic widths — Math.random() caused per-frame jitter)
+    ctx.fillStyle = `rgba(180, 150, 80, ${0.18 * intensity})`;
     for (let i = 0; i < 20; i++) {
       const sx = ((state.frameCount * 3 + i * 47) % (CANVAS_W + 40)) - 20;
       const sy = ((state.frameCount * 2 + i * 83) % (CANVAS_H + 20)) - 10;
-      ctx.fillRect(sx, sy, 15 + Math.random() * 20, 2);
+      const sw = 15 + (i * 7 + 3) % 20;
+      ctx.fillRect(sx, sy, sw, 2);
     }
   }
 
   if (state.hazardActive === 'rapids') {
-    // Shift lanes visually with wave effect
-    const shift = Math.sin(state.frameCount * 0.05) * CELL * 0.15;
-    ctx.fillStyle = `rgba(100, 200, 255, ${0.08 + 0.04 * Math.sin(state.frameCount * 0.1)})`;
-    for (let y = 0; y < CANVAS_H; y += 6) {
-      const xOff = Math.sin((y + state.frameCount * 4) * 0.03) * 8;
+    // Gentle wave overlay (slowed down — was frameCount*4 causing violent shaking)
+    ctx.fillStyle = `rgba(100, 200, 255, ${0.06 + 0.03 * Math.sin(state.frameCount * 0.08)})`;
+    for (let y = 0; y < CANVAS_H; y += 8) {
+      const xOff = Math.sin((y + state.frameCount * 1.2) * 0.025) * 5;
       ctx.fillRect(xOff, y, CANVAS_W, 3);
     }
   }
