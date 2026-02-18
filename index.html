@@ -763,6 +763,8 @@ function drawHazardEffects() {
 
 // Pixel helper: draw a small grid of colored pixels scaled to cell
 function drawPixels(pixels, ox, oy, pxSize) {
+  ox = Math.round(ox);
+  oy = Math.round(oy);
   for (let r = 0; r < pixels.length; r++) {
     for (let c = 0; c < pixels[r].length; c++) {
       const col = pixels[r][c];
@@ -916,12 +918,14 @@ function drawRows() {
   for (const row of state.rows) {
     if (row.y < -CELL || row.y > CANVAS_H + CELL) continue;
 
+    const ry = Math.round(row.y);   // snap to integer pixels to prevent sub-pixel jitter
+
     for (let c = 0; c < COLS; c++) {
       const cell = row.cells[c];
       if (!cell) continue;
 
       const cx = c * CELL + CELL / 2;
-      const cy = row.y + CELL / 2;
+      const cy = ry + CELL / 2;
 
       if (cell === 'rock') {
         drawSprite(ROCK_SPRITE, cx, cy, pxScale);
@@ -938,7 +942,7 @@ function drawRows() {
       } else if (cell === 'delivery') {
         // Delivery zone
         ctx.fillStyle = C.delBg;
-        ctx.fillRect(c * CELL, row.y, CELL, CELL);
+        ctx.fillRect(c * CELL, ry, CELL, CELL);
         // Pyramid icon (simple pixel triangle)
         const triH = CELL * 0.4;
         const triW = CELL * 0.5;
