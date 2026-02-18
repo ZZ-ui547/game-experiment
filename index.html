@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Stones of the Nile</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -17,6 +17,11 @@
     touch-action: none;
     -webkit-user-select: none;
     user-select: none;
+    /* iPhone safe area (notch / Dynamic Island) */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
 
   body {
@@ -50,11 +55,13 @@
     image-rendering: crisp-edges;
     width: 100%;
     height: 100%;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
   }
 
   #overlay {
     position: absolute;
-    inset: 0;
+    top: 0; right: 0; bottom: 0; left: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -99,6 +106,7 @@
     font-weight: bold;
     letter-spacing: 1px;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   #overlay button:hover { background: #e0b050; }
   #overlay button.secondary {
@@ -152,7 +160,7 @@
 
   #celebration {
     position: absolute;
-    inset: 0;
+    top: 0; right: 0; bottom: 0; left: 0;
     z-index: 9;
   }
   #celebration.hidden { display: none; }
@@ -218,6 +226,19 @@ const MAX_SPEED_MULT     = 3.2;     // higher ceiling for infinite play
 
 const JUMP_DURATION      = 32;      // frames airborne
 const JUMP_COOLDOWN      = 40;      // frames before next jump
+
+// ─── Shared AudioContext (iOS Safari limits to ~4-6 instances) ─
+let sharedAudioCtx = null;
+function getAudioCtx() {
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  // iOS Safari suspends AudioContext until a user gesture resumes it
+  if (sharedAudioCtx.state === 'suspended') {
+    sharedAudioCtx.resume();
+  }
+  return sharedAudioCtx;
+}
 
 // ─── Responsive Canvas Setup ─────────────────────────────────
 const canvas    = document.getElementById('game');
@@ -356,7 +377,7 @@ function getNextMilestone() {
 
 function playMilestoneSound() {
   try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const ac = getAudioCtx();
     const master = ac.createGain();
     master.gain.value = 0.2;
     master.connect(ac.destination);
@@ -1458,11 +1479,13 @@ function showOverlay(title, text, btn) {
     shareBtn.textContent = 'Share Score';
     shareBtn.onclick = () => {
       const shareText = 'Stones of the Nile: I reached ' + ms.name + ' with ' + savedScore.toLocaleString() + ' points! Can you beat me?';
-      if (navigator.clipboard) {
+      if (navigator.share) {
+        navigator.share({ title: 'Stones of the Nile', text: shareText }).catch(() => {});
+      } else if (navigator.clipboard) {
         navigator.clipboard.writeText(shareText).then(() => {
           shareBtn.textContent = 'Copied!';
           setTimeout(() => { shareBtn.textContent = 'Share Score'; }, 2000);
-        });
+        }).catch(() => {});
       }
     };
 
@@ -1477,6 +1500,8 @@ function showOverlay(title, text, btn) {
 }
 
 overlayBtn.addEventListener('click', () => {
+  // Unlock AudioContext on user gesture (required by iOS Safari)
+  getAudioCtx();
   const name = nameInput.value.trim();
   if (name) savePlayerName(name);
   overlay.classList.add('hidden');
@@ -1640,7 +1665,7 @@ function drawCelebPyramid(w, h) {
 
 function playPickupSound() {
   try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const ac = getAudioCtx();
     const master = ac.createGain();
     master.gain.value = 0.18;
     master.connect(ac.destination);
@@ -1664,7 +1689,7 @@ function playPickupSound() {
 
 function playVictoryJingle() {
   try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const ac = getAudioCtx();
     const master = ac.createGain();
     master.gain.value = 0.25;
     master.connect(ac.destination);
