@@ -561,6 +561,17 @@ function spawnRow() {
   state.rows.unshift({ y, cells });
 }
 
+// ─── Offscreen canvas for night-mode overlay (reused, avoids alloc per frame) ─
+let _nightCanvas = null;
+function getNightCanvas() {
+  if (!_nightCanvas || _nightCanvas.width !== CANVAS_W || _nightCanvas.height !== CANVAS_H) {
+    _nightCanvas = document.createElement('canvas');
+    _nightCanvas.width = CANVAS_W;
+    _nightCanvas.height = CANVAS_H;
+  }
+  return _nightCanvas;
+}
+
 // ─── Environmental Hazards ────────────────────────────────────
 
 const HAZARD_DEFS = [
@@ -720,23 +731,29 @@ function drawHazardEffects() {
   }
 
   if (state.hazardActive === 'night') {
-    // Dark overlay with spotlight around the boat
+    // Dark overlay with spotlight around the boat.
+    // Use offscreen canvas so destination-out only erases the dark layer,
+    // not the game pixels underneath (fixes flicker on iOS Safari).
     const bx = state.boatLane * CELL + CELL / 2;
     const by = state.boatScreenY;
     const fadeIn = Math.min(1, (HAZARD_DEFS[4].duration - state.hazardTimer) / 90);
-    // Draw dark overlay
-    ctx.fillStyle = `rgba(0, 0, 20, ${0.82 * fadeIn})`;
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    // Cut out spotlight using compositing
-    ctx.save();
-    ctx.globalCompositeOperation = 'destination-out';
+    const nc = getNightCanvas();
+    const nctx = nc.getContext('2d');
+    nctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    // Draw dark overlay on offscreen canvas
+    nctx.fillStyle = `rgba(0, 0, 20, ${0.82 * fadeIn})`;
+    nctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    // Cut out spotlight on offscreen canvas only
+    nctx.globalCompositeOperation = 'destination-out';
     const spotR = CELL * 1.3;
-    const grad = ctx.createRadialGradient(bx, by, spotR * 0.3, bx, by, spotR);
+    const grad = nctx.createRadialGradient(bx, by, spotR * 0.3, bx, by, spotR);
     grad.addColorStop(0, `rgba(0,0,0,${0.95 * fadeIn})`);
     grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(bx - spotR, by - spotR, spotR * 2, spotR * 2);
-    ctx.restore();
+    nctx.fillStyle = grad;
+    nctx.fillRect(bx - spotR, by - spotR, spotR * 2, spotR * 2);
+    nctx.globalCompositeOperation = 'source-over';
+    // Composite the finished overlay onto the main canvas
+    ctx.drawImage(nc, 0, 0);
   }
 }
 
@@ -1728,19 +1745,28 @@ function playVictoryJingle() {
   } catch (e) { /* Web Audio unavailable */ }
 }
 
-// ─── HUD ──────────────────────────────────────────────────────
+// ─── HUD (only touch DOM when values change — prevents layout thrashing on iOS)
+
+const _hudEls = {};
+const _hudPrev = {};
+function hudSet(id, val) {
+  if (_hudPrev[id] === val) return;
+  _hudPrev[id] = val;
+  if (!_hudEls[id]) _hudEls[id] = document.getElementById(id);
+  _hudEls[id].textContent = val;
+}
 
 function updateHUD() {
   state.score = computeScore();
   const ms = getCurrentMilestone();
-  document.getElementById('hud-score').textContent   = state.score.toLocaleString();
-  document.getElementById('hud-lives').textContent   = state.lives;
-  document.getElementById('hud-stones').textContent  = state.stones;
-  document.getElementById('hud-pyramid').textContent = ms.name;
-  document.getElementById('hud-dist').textContent    = state.distance;
-  document.getElementById('hud-speed').textContent   = currentSpeedMult().toFixed(1) + 'x';
+  hudSet('hud-score',   state.score.toLocaleString());
+  hudSet('hud-lives',   state.lives);
+  hudSet('hud-stones',  state.stones);
+  hudSet('hud-pyramid', ms.name);
+  hudSet('hud-dist',    state.distance);
+  hudSet('hud-speed',   currentSpeedMult().toFixed(1) + 'x');
   const dangerLvl = Math.floor(1 + difficultyT() * 9);
-  document.getElementById('hud-danger').textContent  = dangerLvl + '/10';
+  hudSet('hud-danger',  dangerLvl + '/10');
 }
 
 // ─── Game Loop ────────────────────────────────────────────────
