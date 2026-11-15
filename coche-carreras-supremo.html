@@ -18,7 +18,7 @@
 
   .overlay {
     position: fixed; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 18px; text-align: center;
+    align-items: center; justify-content: center; justify-content: safe center; gap: 14px; text-align: center; overflow-y: auto;
     background: rgba(10, 20, 40, 0.72); z-index: 10; padding: 16px;
     padding-top: max(16px, env(safe-area-inset-top));
     padding-bottom: max(16px, env(safe-area-inset-bottom));
@@ -31,13 +31,21 @@
   }
   h2 { font-size: clamp(1.8rem, 8vw, 3.2rem); color: #ffd400; text-shadow: 3px 3px 0 #000; }
   p { font-size: clamp(1rem, 4vw, 1.3rem); text-shadow: 1px 1px 0 #000; }
+  .flags { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: 420px; }
+  .fpick { border: 3px solid transparent; border-radius: 6px; padding: 2px; cursor: pointer; background: rgba(255,255,255,0.12); }
+  .fpick.sel { border-color: #ffd400; background: rgba(255,212,0,0.35); transform: scale(1.12); }
+  .fpick canvas { position: static; display: block; width: 36px; height: 24px; }
+  .results { display: flex; flex-direction: column; gap: 6px; font-size: 1.15rem; text-shadow: 1px 1px 0 #000; }
+  .results div { display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-radius: 10px; background: rgba(255,255,255,0.1); }
+  .results div.me { background: rgba(255,212,0,0.35); font-weight: bold; }
+  .results canvas { position: static; width: 33px; height: 22px; }
   .cars { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
   .pick {
     background: rgba(255,255,255,0.12); border: 4px solid transparent; border-radius: 16px;
     padding: 8px; cursor: pointer;
   }
   .pick.sel { border-color: #ffd400; background: rgba(255,212,0,0.25); }
-  .pick canvas { position: static; width: 56px; height: 84px; }
+  .pick canvas { position: static; width: 50px; height: 75px; }
   button.go {
     font: inherit; font-size: clamp(1.4rem, 6vw, 2rem); padding: 14px 36px;
     border: none; border-radius: 40px; background: #ffd400; color: #b71c1c;
@@ -79,6 +87,8 @@
   <h1>COCHE<br>CARRERAS<br>SUPREMO</h1>
   <p>Elige tu coche:</p>
   <div class="cars" id="cars"></div>
+  <p>Elige tu país: <b id="cname">España</b></p>
+  <div class="flags" id="flags"></div>
   <button class="snd" id="sndTitle" style="position:static">🔊</button>
   <button class="go" id="start">¡A CORRER! 🏁</button>
   <p style="font-size:0.95rem;opacity:.9">◀ ▶ para girar · ¡Evita rocas y barriles!<br>⚡ = turbo · ❤️ = vida extra · 📢 = ¡bocina!<br>Tienes 3 vidas</p>
@@ -88,8 +98,9 @@
   <div class="big" id="endIcon">🏆</div>
   <h2 id="endTitle">¡GANASTE!</h2>
   <p id="endText"></p>
+  <div class="results" id="results"></div>
   <button class="go" id="again">OTRA VEZ 🔁</button>
-  <button class="go" id="menu" style="background:#fff;color:#333;box-shadow:0 6px 0 #aaa;font-size:1.1rem;padding:10px 24px">Cambiar coche</button>
+  <button class="go" id="menu" style="background:#fff;color:#333;box-shadow:0 6px 0 #aaa;font-size:1.1rem;padding:10px 24px">Cambiar coche o país</button>
 </div>
 
 <script>
@@ -117,6 +128,59 @@ const COLORS = [
   { name: 'Verde',    body: '#43a047', dark: '#1b5e20', num: 3 },
   { name: 'Amarillo', body: '#fdd835', dark: '#c49000', num: 4 },
 ];
+
+// Countries: simplified flags drawn on canvas (emoji flags don't show on every device)
+const COUNTRIES = [
+  { code: 'ES', name: 'España' },   { code: 'SK', name: 'Eslovaquia' }, { code: 'CZ', name: 'Chequia' },
+  { code: 'FR', name: 'Francia' },  { code: 'IT', name: 'Italia' },     { code: 'DE', name: 'Alemania' },
+  { code: 'GB', name: 'Reino Unido' }, { code: 'PT', name: 'Portugal' }, { code: 'PL', name: 'Polonia' },
+  { code: 'UA', name: 'Ucrania' },  { code: 'US', name: 'EE. UU.' },    { code: 'MX', name: 'México' },
+  { code: 'AR', name: 'Argentina' },{ code: 'BR', name: 'Brasil' },     { code: 'CO', name: 'Colombia' },
+  { code: 'JP', name: 'Japón' },
+];
+function drawFlag(g, code, x, y, w, h) {
+  g.save(); g.beginPath(); g.rect(x, y, w, h); g.clip();
+  const hz = cols => cols.forEach((c, i) => { g.fillStyle = c; g.fillRect(x, y + h * i / cols.length, w, h / cols.length + 0.5); });
+  const vt = cols => cols.forEach((c, i) => { g.fillStyle = c; g.fillRect(x + w * i / cols.length, y, w / cols.length + 0.5, h); });
+  const dot = (cx, cy, r, c) => { g.fillStyle = c; g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill(); };
+  switch (code) {
+    case 'ES': g.fillStyle = '#c60b1e'; g.fillRect(x, y, w, h); g.fillStyle = '#ffc400'; g.fillRect(x, y + h / 4, w, h / 2);
+      g.fillStyle = '#c60b1e'; g.fillRect(x + w * 0.22, y + h * 0.36, w * 0.12, h * 0.28); break;
+    case 'SK': hz(['#fff', '#0b4ea2', '#ee1c25']);
+      g.fillStyle = '#fff'; g.fillRect(x + w * 0.2, y + h * 0.22, w * 0.26, h * 0.56);
+      g.fillStyle = '#ee1c25'; g.fillRect(x + w * 0.22, y + h * 0.25, w * 0.22, h * 0.5);
+      g.fillStyle = '#fff'; g.fillRect(x + w * 0.315, y + h * 0.3, w * 0.03, h * 0.34); g.fillRect(x + w * 0.27, y + h * 0.38, w * 0.12, h * 0.05);
+      g.fillStyle = '#0b4ea2'; g.fillRect(x + w * 0.22, y + h * 0.64, w * 0.22, h * 0.11); break;
+    case 'CZ': hz(['#fff', '#d7141a']); g.fillStyle = '#11457e';
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + w * 0.5, y + h / 2); g.lineTo(x, y + h); g.fill(); break;
+    case 'FR': vt(['#0055a4', '#fff', '#ef4135']); break;
+    case 'IT': vt(['#009246', '#fff', '#ce2b37']); break;
+    case 'DE': hz(['#000', '#dd0000', '#ffce00']); break;
+    case 'PL': hz(['#fff', '#dc143c']); break;
+    case 'UA': hz(['#0057b7', '#ffd700']); break;
+    case 'MX': vt(['#006847', '#fff', '#ce1126']); dot(x + w / 2, y + h / 2, h * 0.16, '#8d6e3f'); break;
+    case 'AR': hz(['#74acdf', '#fff', '#74acdf']); dot(x + w / 2, y + h / 2, h * 0.12, '#f6b40e'); break;
+    case 'CO': g.fillStyle = '#fcd116'; g.fillRect(x, y, w, h / 2); g.fillStyle = '#003893'; g.fillRect(x, y + h / 2, w, h / 4);
+      g.fillStyle = '#ce1126'; g.fillRect(x, y + h * 0.75, w, h / 4 + 0.5); break;
+    case 'PT': g.fillStyle = '#da291c'; g.fillRect(x, y, w, h); g.fillStyle = '#046a38'; g.fillRect(x, y, w * 0.4, h);
+      dot(x + w * 0.4, y + h / 2, h * 0.22, '#ffe900'); dot(x + w * 0.4, y + h / 2, h * 0.13, '#da291c'); break;
+    case 'BR': g.fillStyle = '#009c3b'; g.fillRect(x, y, w, h); g.fillStyle = '#ffdf00';
+      g.beginPath(); g.moveTo(x + w / 2, y + h * 0.1); g.lineTo(x + w * 0.92, y + h / 2); g.lineTo(x + w / 2, y + h * 0.9); g.lineTo(x + w * 0.08, y + h / 2); g.fill();
+      dot(x + w / 2, y + h / 2, h * 0.22, '#002776'); break;
+    case 'JP': g.fillStyle = '#fff'; g.fillRect(x, y, w, h); dot(x + w / 2, y + h / 2, h * 0.3, '#bc002d'); break;
+    case 'US': for (let i = 0; i < 7; i++) { g.fillStyle = i % 2 ? '#fff' : '#b22234'; g.fillRect(x, y + h * i / 7, w, h / 7 + 0.5); }
+      g.fillStyle = '#3c3b6e'; g.fillRect(x, y, w * 0.42, h * 0.54);
+      g.fillStyle = '#fff'; for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++) g.fillRect(x + w * (0.05 + j * 0.095), y + h * (0.08 + i * 0.16), Math.max(1, w * 0.04), Math.max(1, w * 0.04)); break;
+    case 'GB': g.fillStyle = '#012169'; g.fillRect(x, y, w, h);
+      g.strokeStyle = '#fff'; g.lineWidth = h * 0.2; g.beginPath(); g.moveTo(x, y); g.lineTo(x + w, y + h); g.moveTo(x + w, y); g.lineTo(x, y + h); g.stroke();
+      g.strokeStyle = '#c8102e'; g.lineWidth = h * 0.08; g.stroke();
+      g.fillStyle = '#fff'; g.fillRect(x + w * 0.4, y, w * 0.2, h); g.fillRect(x, y + h * 0.33, w, h * 0.34);
+      g.fillStyle = '#c8102e'; g.fillRect(x + w * 0.44, y, w * 0.12, h); g.fillRect(x, y + h * 0.4, w, h * 0.2); break;
+  }
+  g.restore();
+  g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 1; g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+const countryOf = code => COUNTRIES.find(c => c.code === code);
 
 const LEN = 24000;       // track length (world units)
 const HW = 140;          // road half-width
@@ -276,12 +340,12 @@ cv.addEventListener('touchend', e => { e.preventDefault(); screenTouches(e); }, 
 // ---------- Game state ----------
 let state = 'title'; // title | countdown | race | finished | over
 let cars = [], player = null, obstacles = [], pickups = [], trees = [], particles = [], popups = [];
-let playerColor = 0, countdown = 0, raceTime = 0, finishOrder = [], flash = 0, endTimer = 0;
+let playerCountry = 'ES', playerColor = 0, countdown = 0, raceTime = 0, finishOrder = [], flash = 0, endTimer = 0;
 const rnd = (a, b) => a + Math.random() * (b - a);
 
-function makeCar(colorIdx, lane, isPlayer) {
+function makeCar(colorIdx, lane, isPlayer, country) {
   return {
-    color: COLORS[colorIdx], x: lane, y: 0, speed: 0, isPlayer,
+    country, color: COLORS[colorIdx], x: lane, y: 0, speed: 0, isPlayer,
     spin: 0, spinAngle: 0, inv: 0, turbo: 0, lives: 3, finished: false, finishTime: 0,
     base: rnd(470, 505), lane, laneTimer: rnd(2, 5), look: rnd(170, 260), skill: rnd(0.75, 0.92),
     seen: new Set(), alive: true,
@@ -293,11 +357,12 @@ function newRace() {
   // player starts in lane 2 (second from left), others fill the rest
   const order = [0, 1, 2, 3].filter(i => i !== playerColor);
   cars = [];
-  player = makeCar(playerColor, lanes[1], true);
-  cars.push(makeCar(order[0], lanes[0], false));
+  const others = COUNTRIES.map(c => c.code).filter(c => c !== playerCountry).sort(() => Math.random() - 0.5);
+  player = makeCar(playerColor, lanes[1], true, playerCountry);
+  cars.push(makeCar(order[0], lanes[0], false, others[0]));
   cars.push(player);
-  cars.push(makeCar(order[1], lanes[2], false));
-  cars.push(makeCar(order[2], lanes[3], false));
+  cars.push(makeCar(order[1], lanes[2], false, others[1]));
+  cars.push(makeCar(order[2], lanes[3], false, others[2]));
   cars.forEach(c => { c.y = 0; });
   // stagger grid a bit
   cars[0].y = 10; cars[2].y = -10; cars[3].y = 5;
@@ -351,7 +416,10 @@ function update(dt) {
     const pos = standings().indexOf(player) + 1;
     passCd -= dt;
     if (lastPos && pos !== lastPos && passCd <= 0) {
-      if (pos < lastPos) { sfx.pass(); popups.push({ text: '¡ADELANTASTE!', t: 0.8 }); } else sfx.passed();
+      if (pos < lastPos) {
+        const st = standings(), beaten = st[pos]; // the car right behind us now
+        sfx.pass(); popups.push({ text: '¡Adelantaste a ' + countryOf(beaten.country).name + '!', t: 1 });
+      } else sfx.passed();
       passCd = 1;
     }
     if (passCd <= 0 || !lastPos) lastPos = pos;
@@ -665,10 +733,8 @@ function drawCar(g, color, x, y, angle, opts = {}) {
   // windshield
   g.fillStyle = '#263238'; rr(g, -CAR_W / 2 + 4, -10, CAR_W - 8, 10, 3); g.fill();
   g.fillStyle = '#90caf9'; rr(g, -CAR_W / 2 + 6, -9, 6, 4, 1); g.fill();
-  // number
-  g.fillStyle = '#fff'; circle2(g, 0, 10, 7);
-  g.fillStyle = '#111'; g.font = 'bold 10px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(String(color.num), 0, 10.5);
+  // country flag on the roof
+  if (opts.flag) { g.fillStyle = '#fff'; g.fillRect(-12, 2, 24, 16); drawFlag(g, opts.flag, -11, 3, 22, 14); }
   // headlights
   g.fillStyle = '#fff59d'; g.fillRect(-CAR_W / 2 + 3, -CAR_H / 2 + 1, 5, 3); g.fillRect(CAR_W / 2 - 8, -CAR_H / 2 + 1, 5, 3);
   g.restore();
@@ -692,7 +758,7 @@ function drawCars() {
       ang = steer * 0.18;
     }
     if (!c.alive) ang = 0.4;
-    drawCar(ctx, c.color, x, s, ang);
+    drawCar(ctx, c.color, x, s, ang, { flag: c.country });
     if (c.isPlayer) {
       ctx.fillStyle = '#ffd400'; ctx.beginPath(); ctx.moveTo(x, s + 34); ctx.lineTo(x - 7, s + 44); ctx.lineTo(x + 7, s + 44); ctx.fill();
     }
@@ -720,19 +786,21 @@ function drawHUD() {
   // position
   const st = standings(), pos = st.indexOf(player) + 1;
   ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(0,0,0,0.35)'; rr(ctx, W - pad - 96, pad - 4, 100, 58, 10); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'; rr(ctx, W - pad - 96, pad - 4, 100, 64, 10); ctx.fill();
   ctx.font = 'bold 40px sans-serif'; ctx.fillStyle = pos === 1 ? '#ffd400' : '#fff';
   ctx.fillText(pos + 'º', W - pad - 30, pad);
   ctx.font = 'bold 18px sans-serif'; ctx.fillStyle = '#fff'; ctx.fillText('/4', W - pad, pad + 18);
+  drawFlag(ctx, player.country, W - pad - 90, pad + 36, 22, 14);
 
   // progress bar (right side)
   const bx = W - 22, by = 90, bh = Math.min(H * 0.45, 300);
   ctx.fillStyle = 'rgba(0,0,0,0.4)'; rr(ctx, bx - 5, by - 6, 10, bh + 12, 5); ctx.fill();
   ctx.font = '16px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillText('🏁', bx, by - 6);
-  for (const c of cars) {
+  for (const c of cars.slice().sort((a, b) => a.isPlayer - b.isPlayer)) {
     const p = Math.max(0, Math.min(1, c.y / LEN));
-    ctx.fillStyle = c.color.body; ctx.strokeStyle = c.isPlayer ? '#fff' : '#000'; ctx.lineWidth = c.isPlayer ? 3 : 1.5;
-    ctx.beginPath(); ctx.arc(bx, by + bh - p * bh, c.isPlayer ? 8 : 6, 0, 7); ctx.fill(); ctx.stroke();
+    const fw = c.isPlayer ? 22 : 16, fh = fw * 0.66, fy = by + bh - p * bh - fh / 2;
+    ctx.fillStyle = c.isPlayer ? '#ffd400' : c.color.body; ctx.fillRect(bx - fw / 2 - 2, fy - 2, fw + 4, fh + 4);
+    drawFlag(ctx, c.country, bx - fw / 2, fy, fw, fh);
   }
 
   // speed bar
@@ -796,18 +864,42 @@ function render() {
 // ---------- Screens ----------
 const titleEl = document.getElementById('title'), endEl = document.getElementById('end');
 const carsEl = document.getElementById('cars');
+try { const sv = JSON.parse(localStorage.getItem('ccs_pick') || 'null'); if (sv) { playerColor = sv.color | 0; if (countryOf(sv.country)) playerCountry = sv.country; } } catch (e) {}
+function savePick() { try { localStorage.setItem('ccs_pick', JSON.stringify({ color: playerColor, country: playerCountry })); } catch (e) {} }
+const previews = [];
+function drawPreviews() {
+  previews.forEach(({ g, col }) => { g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, 112, 168); g.scale(2.4, 2.4); drawCar(g, col, 23, 35, 0, { shadow: false, flag: playerCountry }); });
+}
 COLORS.forEach((col, i) => {
-  const d = document.createElement('div'); d.className = 'pick' + (i === 0 ? ' sel' : '');
+  const d = document.createElement('div'); d.className = 'pick' + (i === playerColor ? ' sel' : '');
   const c = document.createElement('canvas'); c.width = 112; c.height = 168;
-  const g = c.getContext('2d'); g.scale(2.4, 2.4); drawCar(g, col, 23, 35, 0, { shadow: false });
+  previews.push({ g: c.getContext('2d'), col });
   d.appendChild(c);
   d.addEventListener('click', () => {
-    initAudio(); playerColor = i;
+    initAudio(); playerColor = i; savePick();
     carsEl.querySelectorAll('.pick').forEach(e => e.classList.remove('sel')); d.classList.add('sel');
     tone(500 + i * 120, 0.12, 'square', 0.1);
   });
   carsEl.appendChild(d);
 });
+const flagsEl = document.getElementById('flags');
+document.getElementById('cname').textContent = countryOf(playerCountry).name;
+function flagCanvas(code, w = 72, h = 48) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  drawFlag(c.getContext('2d'), code, 0, 0, w, h); return c;
+}
+COUNTRIES.forEach((ct, i) => {
+  const d = document.createElement('div'); d.className = 'fpick' + (ct.code === playerCountry ? ' sel' : ''); d.title = ct.name;
+  d.appendChild(flagCanvas(ct.code));
+  d.addEventListener('click', () => {
+    initAudio(); playerCountry = ct.code; savePick();
+    flagsEl.querySelectorAll('.fpick').forEach(e => e.classList.remove('sel')); d.classList.add('sel');
+    document.getElementById('cname').textContent = ct.name;
+    drawPreviews(); tone(600 + i * 40, 0.1, 'square', 0.1);
+  });
+  flagsEl.appendChild(d);
+});
+drawPreviews();
 
 let best = null;
 try { best = JSON.parse(localStorage.getItem('ccs_best') || 'null'); } catch (e) {}
@@ -842,6 +934,13 @@ function showEnd() {
     } else if (best !== null) msg += ` · Récord: ${best.toFixed(1)} s`;
     text.textContent = msg;
   }
+  const res = document.getElementById('results'); res.innerHTML = '';
+  standings().forEach((c, i) => {
+    const row = document.createElement('div'); if (c.isPlayer) row.className = 'me';
+    const a = document.createElement('span'); a.textContent = (i + 1) + 'º';
+    const b = document.createElement('span'); b.textContent = countryOf(c.country).name + (c.isPlayer ? ' (tú)' : '');
+    row.append(a, flagCanvas(c.country, 66, 44), b); res.appendChild(row);
+  });
   endEl.classList.remove('hidden');
 }
 
