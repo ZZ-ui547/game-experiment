@@ -54,23 +54,34 @@
   }
   .tbtn svg { pointer-events: none; }
   .tbtn.on { background: rgba(255,212,0,0.55); }
+  #bh { left: 50%; transform: translateX(-50%); width: 76px; height: 76px; font-size: 34px; }
+  .snd {
+    position: fixed; top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    z-index: 6; font-size: 24px; width: 48px; height: 48px; border-radius: 50%; border: none;
+    background: rgba(0,0,0,0.35); cursor: pointer;
+  }
+  #title .snd { transform: none; }
   #bl { left: max(16px, env(safe-area-inset-left)); }
   #br { right: max(16px, env(safe-area-inset-right)); }
   @media (hover: hover) and (pointer: fine) { .tbtn { display: none; } }
+  body.menu #sndGame, body.menu .tbtn { display: none; }
 </style>
 </head>
-<body>
+<body class="menu">
 <canvas id="c"></canvas>
 
 <div id="bl" class="tbtn"><svg width="48" height="48" viewBox="0 0 48 48"><path d="M34 6 L10 24 L34 42 Z" fill="#fff"/></svg></div>
+<div id="bh" class="tbtn">📢</div>
+<button class="snd" id="sndGame">🔊</button>
 <div id="br" class="tbtn"><svg width="48" height="48" viewBox="0 0 48 48"><path d="M14 6 L38 24 L14 42 Z" fill="#fff"/></svg></div>
 
 <div id="title" class="overlay">
   <h1>COCHE<br>CARRERAS<br>SUPREMO</h1>
   <p>Elige tu coche:</p>
   <div class="cars" id="cars"></div>
+  <button class="snd" id="sndTitle" style="position:static">🔊</button>
   <button class="go" id="start">¡A CORRER! 🏁</button>
-  <p style="font-size:0.95rem;opacity:.9">◀ ▶ para girar · ¡Evita rocas y barriles!<br>⚡ = turbo · ❤️ = vida extra · Tienes 3 vidas</p>
+  <p style="font-size:0.95rem;opacity:.9">◀ ▶ para girar · ¡Evita rocas y barriles!<br>⚡ = turbo · ❤️ = vida extra · 📢 = ¡bocina!<br>Tienes 3 vidas</p>
 </div>
 
 <div id="end" class="overlay hidden">
@@ -122,47 +133,98 @@ function center(y) {
 }
 
 // ---------- Audio ----------
-let ac = null, engOsc = null, engGain = null, engFilter = null;
+let ac = null, master = null, engOsc = null, engOsc2 = null, engGain = null, engFilter = null;
+let muted = false;
+try { muted = localStorage.getItem('ccs_muted') === '1'; } catch (e) {}
 function initAudio() {
-  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  if (ac) { if (ac.state !== 'running') ac.resume(); return; }
   try {
     ac = new (window.AudioContext || window.webkitAudioContext)();
+    const comp = ac.createDynamicsCompressor();
+    master = ac.createGain(); master.gain.value = muted ? 0 : 0.9;
+    master.connect(comp).connect(ac.destination);
+    // engine: two detuned saws through a lowpass = rumbly motor
     engOsc = ac.createOscillator(); engOsc.type = 'sawtooth';
-    engFilter = ac.createBiquadFilter(); engFilter.type = 'lowpass'; engFilter.frequency.value = 500;
+    engOsc2 = ac.createOscillator(); engOsc2.type = 'square';
+    engFilter = ac.createBiquadFilter(); engFilter.type = 'lowpass'; engFilter.frequency.value = 600;
     engGain = ac.createGain(); engGain.gain.value = 0;
-    engOsc.connect(engFilter).connect(engGain).connect(ac.destination);
-    engOsc.start();
+    engOsc.connect(engFilter); engOsc2.connect(engFilter);
+    engFilter.connect(engGain).connect(master);
+    engOsc.start(); engOsc2.start();
+    // iOS unlock: play a silent buffer inside the user gesture
+    const b = ac.createBuffer(1, 1, 22050), src = ac.createBufferSource();
+    src.buffer = b; src.connect(ac.destination); src.start(0);
+    if (ac.state !== 'running') ac.resume();
   } catch (e) { ac = null; }
 }
-function tone(freq, dur, type = 'square', vol = 0.12, slide = 0, delay = 0) {
+// unlock on the first interaction anywhere (iOS needs touchend/click)
+['touchend', 'click', 'keydown'].forEach(ev => addEventListener(ev, initAudio, { passive: true }));
+function setMuted(m) {
+  muted = m;
+  try { localStorage.setItem('ccs_muted', m ? '1' : '0'); } catch (e) {}
+  if (master) master.gain.setTargetAtTime(m ? 0 : 0.9, ac.currentTime, 0.02);
+  document.querySelectorAll('.snd').forEach(b => b.textContent = m ? '🔇' : '🔊');
+}
+function tone(freq, dur, type = 'square', vol = 0.12, slide = 0, delay = 0, at = 0) {
   if (!ac) return;
-  const t = ac.currentTime + delay;
+  const t = at || ac.currentTime + delay;
   const o = ac.createOscillator(), g = ac.createGain();
   o.type = type; o.frequency.setValueAtTime(freq, t);
   if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + dur);
-  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.02);
 }
-function noise(dur, vol = 0.25) {
+let noiseBuf = null;
+function noise(dur, vol = 0.25, filterFreq = 0, delay = 0) {
   if (!ac) return;
-  const n = Math.floor(ac.sampleRate * dur);
-  const buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
-  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  if (!noiseBuf) {
+    noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const t = ac.currentTime + delay;
   const s = ac.createBufferSource(), g = ac.createGain();
-  s.buffer = buf; g.gain.value = vol; s.connect(g).connect(ac.destination); s.start();
+  s.buffer = noiseBuf;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  let node = s;
+  if (filterFreq) { const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = filterFreq; f.Q.value = 0.8; s.connect(f); node = f; }
+  node.connect(g).connect(master); s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.02);
 }
 const sfx = {
-  beep: () => tone(440, 0.25, 'square', 0.15),
-  go: () => tone(880, 0.5, 'square', 0.18),
-  crash: () => { noise(0.5, 0.35); tone(160, 0.4, 'sawtooth', 0.15, -120); },
-  oil: () => tone(500, 0.6, 'triangle', 0.15, -380),
-  cone: () => tone(700, 0.12, 'square', 0.1, -300),
-  turbo: () => { tone(400, 0.5, 'sawtooth', 0.12, 900); },
-  heart: () => [660, 880, 1100].forEach((f, i) => tone(f, 0.15, 'square', 0.12, 0, i * 0.08)),
-  bump: () => tone(120, 0.12, 'square', 0.12),
-  win: () => [523, 659, 784, 1047, 784, 1047].forEach((f, i) => tone(f, 0.22, 'square', 0.13, 0, i * 0.14)),
-  lose: () => [400, 330, 260, 200].forEach((f, i) => tone(f, 0.3, 'triangle', 0.15, 0, i * 0.2)),
+  beep: () => { tone(440, 0.3, 'square', 0.2); tone(220, 0.3, 'triangle', 0.15); },
+  go: () => { tone(880, 0.7, 'square', 0.22); tone(440, 0.7, 'triangle', 0.18); },
+  crash: () => { noise(0.7, 0.6); noise(0.4, 0.5, 300); tone(180, 0.5, 'sawtooth', 0.22, -140); tone(90, 0.6, 'square', 0.15, -50); },
+  oil: () => { noise(0.7, 0.25, 2500); tone(900, 0.7, 'triangle', 0.15, -650); },
+  cone: () => { tone(900, 0.1, 'square', 0.15, -500); noise(0.08, 0.3, 1500); },
+  turbo: () => { tone(300, 0.7, 'sawtooth', 0.16, 1100); noise(0.8, 0.3, 1200); },
+  heart: () => [660, 880, 1100, 1320].forEach((f, i) => tone(f, 0.18, 'square', 0.15, 0, i * 0.08)),
+  bump: () => { tone(110, 0.15, 'square', 0.2, -40); noise(0.1, 0.3, 400); },
+  pass: () => { tone(988, 0.12, 'square', 0.14); tone(1319, 0.25, 'square', 0.14, 0, 0.1); },
+  passed: () => tone(330, 0.25, 'triangle', 0.14, -120),
+  horn: () => { tone(415, 0.35, 'square', 0.16); tone(523, 0.35, 'square', 0.13); },
+  grass: () => noise(0.12, 0.12, 250),
+  stretch: () => [784, 784, 1047].forEach((f, i) => tone(f, i === 2 ? 0.4 : 0.12, 'square', 0.16, 0, i * 0.13)),
+  win: () => [523, 659, 784, 1047, 784, 1047, 1319].forEach((f, i) => tone(f, i === 6 ? 0.8 : 0.22, 'square', 0.16, 0, i * 0.14)),
+  lose: () => [400, 330, 260, 200].forEach((f, i) => tone(f, 0.35, 'triangle', 0.2, 0, i * 0.22)),
 };
+
+// Background music: tiny chiptune loop scheduled ahead of time
+const MEL = [76,0,79,0,81,79,76,0, 74,0,76,0,79,0,0,0, 76,0,79,0,81,83,84,0, 83,81,79,0,76,0,0,0];
+const BASS = [45,45,52,45,45,45,52,45, 43,43,50,43,43,43,50,43, 41,41,48,41,41,41,48,41, 43,43,50,43,47,47,50,47];
+let musicStep = 0, musicNext = 0, musicFast = false;
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+function updateMusic() {
+  if (!ac || state !== 'race') { musicNext = 0; return; }
+  const stepDur = musicFast ? 0.11 : 0.14;
+  if (!musicNext || musicNext < ac.currentTime) musicNext = ac.currentTime + 0.05;
+  while (musicNext < ac.currentTime + 0.25) {
+    const i = musicStep % 32;
+    if (MEL[i]) tone(mtof(MEL[i]), stepDur * 1.6, 'square', 0.045, 0, 0, musicNext);
+    tone(mtof(BASS[i]), stepDur * 0.9, 'triangle', 0.09, 0, 0, musicNext);
+    if (i % 4 === 2) noise(0.04, 0.06, 6000); // hi-hat (immediate is fine: short)
+    musicStep++; musicNext += stepDur;
+  }
+}
 
 // ---------- Input ----------
 const keys = {};
@@ -172,6 +234,16 @@ addEventListener('keydown', e => {
   if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.code === 'KeyH' || e.code === 'Space') honk();
+  if (e.code === 'KeyM') setMuted(!muted);
+});
+let hornCd = 0;
+function honk() {
+  if (hornCd > 0 || (state !== 'race' && state !== 'countdown')) return;
+  hornCd = 0.4; sfx.horn(); popups.push({ text: '¡PII PIII!', t: 0.6 });
+}
 function bindBtn(id, set) {
   const el = document.getElementById(id);
   const on = e => { e.preventDefault(); initAudio(); set(true); el.classList.add('on'); };
@@ -183,6 +255,13 @@ function bindBtn(id, set) {
 }
 bindBtn('bl', v => touchL = v);
 bindBtn('br', v => touchR = v);
+document.getElementById('bh').addEventListener('touchstart', e => { e.preventDefault(); e.stopPropagation(); initAudio(); honk(); }, { passive: false });
+document.getElementById('bh').addEventListener('mousedown', e => { initAudio(); honk(); });
+document.querySelectorAll('.snd').forEach(b => {
+  b.textContent = muted ? '🔇' : '🔊';
+  const t = e => { e.preventDefault(); e.stopPropagation(); initAudio(); setMuted(!muted); };
+  b.addEventListener('touchend', t, { passive: false }); b.addEventListener('click', t);
+});
 // Touching the left/right half of the screen also steers
 function screenTouches(e) {
   if (state !== 'race' && state !== 'countdown') return;
@@ -249,10 +328,10 @@ function newRace() {
     trees.push({ y: ty, off: side * (HW + 34 + rnd(0, 160)), r: rnd(14, 24), kind: Math.random() < 0.8 ? 'tree' : 'bush' });
   }
   finishOrder = []; raceTime = 0; flash = 0; endTimer = 0; endShown = false;
-  countdown = 3.999; lastBeep = 4;
+  countdown = 3.999; lastBeep = 4; lastPos = 0; stretchDone = false; musicFast = false; musicStep = 0;
   state = 'countdown';
 }
-let lastBeep = 4;
+let lastBeep = 4, passCd = 0, lastPos = 0, stretchDone = false, grassCd = 0;
 
 // ---------- Update ----------
 function update(dt) {
@@ -266,6 +345,22 @@ function update(dt) {
   }
   if (state !== 'race' && state !== 'finished' && state !== 'over') return;
   if (state === 'race') raceTime += dt;
+  hornCd = Math.max(0, hornCd - dt);
+  updateMusic();
+  if (state === 'race') {
+    const pos = standings().indexOf(player) + 1;
+    passCd -= dt;
+    if (lastPos && pos !== lastPos && passCd <= 0) {
+      if (pos < lastPos) { sfx.pass(); popups.push({ text: '¡ADELANTASTE!', t: 0.8 }); } else sfx.passed();
+      passCd = 1;
+    }
+    if (passCd <= 0 || !lastPos) lastPos = pos;
+    if (!stretchDone && player.y > LEN * 0.85) {
+      stretchDone = true; musicFast = true; sfx.stretch(); popups.push({ text: '¡ÚLTIMO TRAMO!', t: 1.4 });
+    }
+    grassCd -= dt;
+    if (Math.abs(player.x) > HW - 10 && player.speed > 120 && grassCd <= 0) { sfx.grass(); grassCd = 0.13; }
+  }
 
   for (const c of cars) updateCar(c, dt);
   carCollisions();
@@ -437,8 +532,11 @@ function updateEngine() {
   if (!ac || !engOsc) return;
   const on = (state === 'race' || state === 'countdown') && player && player.alive;
   const sp = player ? player.speed : 0;
-  engOsc.frequency.setTargetAtTime(55 + sp * 0.28 + (player && player.turbo > 0 ? 40 : 0), ac.currentTime, 0.05);
-  engGain.gain.setTargetAtTime(on ? 0.05 : 0, ac.currentTime, 0.1);
+  const f = 50 + sp * 0.25 + (player && player.turbo > 0 ? 45 : 0);
+  engOsc.frequency.setTargetAtTime(f, ac.currentTime, 0.05);
+  engOsc2.frequency.setTargetAtTime(f * 0.5 + 1.5, ac.currentTime, 0.05);
+  engFilter.frequency.setTargetAtTime(400 + sp * 1.2, ac.currentTime, 0.05);
+  engGain.gain.setTargetAtTime(on ? 0.07 : 0, ac.currentTime, 0.1);
 }
 
 function standings() {
@@ -716,14 +814,14 @@ try { best = JSON.parse(localStorage.getItem('ccs_best') || 'null'); } catch (e)
 
 function startRace() {
   initAudio();
-  titleEl.classList.add('hidden'); endEl.classList.add('hidden');
+  titleEl.classList.add('hidden'); endEl.classList.add('hidden'); document.body.classList.remove('menu');
   touchL = touchR = false;
   newRace();
 }
 document.getElementById('start').addEventListener('click', startRace);
 document.getElementById('again').addEventListener('click', startRace);
 document.getElementById('menu').addEventListener('click', () => {
-  endEl.classList.add('hidden'); titleEl.classList.remove('hidden'); state = 'title'; player = null;
+  endEl.classList.add('hidden'); titleEl.classList.remove('hidden'); document.body.classList.add('menu'); state = 'title'; player = null;
 });
 
 let endShown = false;
