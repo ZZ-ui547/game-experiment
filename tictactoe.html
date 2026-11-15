@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tic Tac Toe</title>
+<style>
+  :root {
+    --bg: #f4f4f7; --fg: #1e1e24; --cell: #ffffff; --line: #d0d0da;
+    --x: #e4572e; --o: #2e86ab; --win: #ffe9a8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16161c; --fg: #ececf1; --cell: #23232c; --line: #3a3a48; --win: #5a4a12; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; padding: 16px;
+    font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg);
+  }
+  h1 { margin: 0; font-size: 1.8rem; }
+  #status { font-size: 1.2rem; min-height: 1.5em; }
+  #board {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    width: min(90vw, 360px); aspect-ratio: 1;
+  }
+  .cell {
+    background: var(--cell); border: 2px solid var(--line); border-radius: 12px;
+    font-size: clamp(2.5rem, 15vw, 5rem); font-weight: 700; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; color: var(--fg);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .cell:disabled { cursor: default; }
+  .cell.X { color: var(--x); }
+  .cell.O { color: var(--o); }
+  .cell.win { background: var(--win); }
+  #scores { display: flex; gap: 24px; font-size: 1rem; }
+  #scores .X { color: var(--x); font-weight: 700; }
+  #scores .O { color: var(--o); font-weight: 700; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  button.ctl, select {
+    font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--cell); color: var(--fg); cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <h1>Tic Tac Toe</h1>
+  <div id="status" aria-live="polite"></div>
+  <div id="board"></div>
+  <div id="scores">
+    <span><span class="X">X</span>: <b id="sX">0</b></span>
+    <span>Draws: <b id="sD">0</b></span>
+    <span><span class="O">O</span>: <b id="sO">0</b></span>
+  </div>
+  <div class="controls">
+    <select id="mode" aria-label="Game mode">
+      <option value="pvp">2 players</option>
+      <option value="cpu">vs Computer</option>
+    </select>
+    <button class="ctl" id="restart">New round</button>
+    <button class="ctl" id="reset">Reset scores</button>
+  </div>
+
+<script>
+const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const boardEl = document.getElementById('board');
+const statusEl = document.getElementById('status');
+const modeEl = document.getElementById('mode');
+const scores = { X: 0, O: 0, D: 0 };
+let board, turn, over, starter = 'X';
+
+const cells = Array.from({ length: 9 }, (_, i) => {
+  const b = document.createElement('button');
+  b.className = 'cell';
+  b.setAttribute('aria-label', `Cell ${i + 1}`);
+  b.addEventListener('click', () => onCellClick(i));
+  boardEl.appendChild(b);
+  return b;
+});
+
+function winner(b) {
+  for (const l of LINES) {
+    const [a, c, d] = l;
+    if (b[a] && b[a] === b[c] && b[a] === b[d]) return { player: b[a], line: l };
+  }
+  return b.every(Boolean) ? { player: null, line: [] } : null;
+}
+
+function render() {
+  board.forEach((v, i) => {
+    cells[i].textContent = v || '';
+    cells[i].className = 'cell' + (v ? ' ' + v : '');
+    cells[i].disabled = over || !!v;
+  });
+  document.getElementById('sX').textContent = scores.X;
+  document.getElementById('sO').textContent = scores.O;
+  document.getElementById('sD').textContent = scores.D;
+}
+
+function play(i) {
+  board[i] = turn;
+  const res = winner(board);
+  if (res) {
+    over = true;
+    if (res.player) {
+      scores[res.player]++;
+      statusEl.textContent = `${res.player} wins!`;
+    } else {
+      scores.D++;
+      statusEl.textContent = "It's a draw.";
+    }
+    render();
+    res.line.forEach(k => cells[k].classList.add('win'));
+    return;
+  }
+  turn = turn === 'X' ? 'O' : 'X';
+  statusEl.textContent = `${turn}'s turn`;
+  render();
+}
+
+function onCellClick(i) {
+  if (over || board[i]) return;
+  if (modeEl.value === 'cpu' && turn === 'O') return; // wait for CPU
+  play(i);
+  maybeCpu();
+}
+
+// Computer plays O using minimax (unbeatable).
+function maybeCpu() {
+  if (over || modeEl.value !== 'cpu' || turn !== 'O') return;
+  setTimeout(() => { if (!over && turn === 'O') play(bestMove(board, 'O')); }, 350);
+}
+
+function minimax(b, player, depth) {
+  const res = winner(b);
+  if (res) return res.player === 'O' ? 10 - depth : res.player === 'X' ? depth - 10 : 0;
+  let best = player === 'O' ? -Infinity : Infinity;
+  for (let i = 0; i < 9; i++) {
+    if (b[i]) continue;
+    b[i] = player;
+    const s = minimax(b, player === 'O' ? 'X' : 'O', depth + 1);
+    b[i] = null;
+    best = player === 'O' ? Math.max(best, s) : Math.min(best, s);
+  }
+  return best;
+}
+
+function bestMove(b, player) {
+  let bestScore = -Infinity, moves = [];
+  for (let i = 0; i < 9; i++) {
+    if (b[i]) continue;
+    b[i] = player;
+    const s = minimax(b, 'X', 1);
+    b[i] = null;
+    if (s > bestScore) { bestScore = s; moves = [i]; }
+    else if (s === bestScore) moves.push(i);
+  }
+  return moves[Math.floor(Math.random() * moves.length)];
+}
+
+function newRound() {
+  board = Array(9).fill(null);
+  over = false;
+  turn = starter;
+  starter = starter === 'X' ? 'O' : 'X'; // alternate who starts
+  statusEl.textContent = `${turn}'s turn`;
+  render();
+  maybeCpu();
+}
+
+document.getElementById('restart').addEventListener('click', newRound);
+document.getElementById('reset').addEventListener('click', () => {
+  scores.X = scores.O = scores.D = 0;
+  starter = 'X';
+  newRound();
+});
+modeEl.addEventListener('change', () => {
+  scores.X = scores.O = scores.D = 0;
+  starter = 'X';
+  newRound();
+});
+
+newRound();
+</script>
+</body>
+</html>
